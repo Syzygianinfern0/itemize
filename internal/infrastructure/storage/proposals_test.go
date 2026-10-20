@@ -20,8 +20,8 @@ func sampleProposal(orderID, txnID string) *Proposal {
 	return &Proposal{
 		OrderID: orderID, Provider: "walmart", TransactionID: txnID, Kind: ProposalKindSplits,
 		Amount: -44, Before: json.RawMessage(`{"id":"` + txnID + `","amount":-44}`),
-		Splits: []SplitDetail{{CategoryID: "groceries", Amount: -11, Notes: "Groceries:\n- Water $10.00"}, {CategoryID: "travel", Amount: -33}},
-		Items:  []ProposalItem{{Name: "Water", Price: 10, Quantity: 1, CategoryID: "groceries"}},
+		Splits:    []SplitDetail{{CategoryID: "groceries", Amount: -11, Notes: "Groceries:\n- Water $10.00"}, {CategoryID: "travel", Amount: -33}},
+		Items:     []ProposalItem{{Name: "Water", Price: 10, Quantity: 1, CategoryID: "groceries"}},
 		OrderDate: "2025-01-02", OrderTotal: 44, Reason: "synthetic", Confidence: 0.9,
 	}
 }
