@@ -76,13 +76,22 @@ func (p *Provider) FetchOrders(ctx context.Context, opts providers.FetchOptions)
 		MaxTimestamp: &maxTimestamp,
 	}
 
-	// Fetch purchase history from Walmart API
-	resp, err := p.client.GetPurchaseHistory(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch walmart orders: %w", err)
+	// Fetch purchase history from Walmart API, following the page cursor
+	// (LOCAL EVAL PATCH: upstream reads only the first page of 10 orders).
+	var allGroups []walmartclient.OrderSummary
+	for page := 0; page < 200; page++ {
+		resp, err := p.client.GetPurchaseHistory(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch walmart orders (page %d): %w", page+1, err)
+		}
+		allGroups = append(allGroups, resp.Data.OrderHistoryV2.OrderGroups...)
+		req.Cursor = resp.Data.OrderHistoryV2.PageInfo.NextPageCursor
+		if req.Cursor == "" {
+			break
+		}
 	}
 
-	orderSummaries, duplicates := dedupeOrderSummariesByID(resp.Data.OrderHistoryV2.OrderGroups)
+	orderSummaries, duplicates := dedupeOrderSummariesByID(allGroups)
 	for _, orderID := range duplicates {
 		p.logger.Warn("duplicate order summary returned by Walmart; using first occurrence",
 			slog.String("order_id", orderID))

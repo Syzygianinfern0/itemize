@@ -86,13 +86,22 @@ func (o *Orchestrator) fetchMonarchTransactions(ctx context.Context, opts Option
 		"limit":      500,
 	}
 	started := time.Now()
-	txList, err := o.clients.Monarch.Transactions.Query().
-		Between(startDate.AddDate(0, 0, -7), endDate). // Add buffer for date matching
-		Limit(500).
-		Execute(ctx)
-	if err != nil {
-		o.logProviderFetch("monarch_transactions", request, nil, err, time.Since(started), 0, 0)
-		return nil, fmt.Errorf("failed to fetch transactions: %w", err)
+	// LOCAL EVAL PATCH: page through all transactions; upstream stops at the first 500.
+	txList := &monarch.TransactionList{}
+	for offset := 0; ; offset += 500 {
+		page, err := o.clients.Monarch.Transactions.Query().
+			Between(startDate.AddDate(0, 0, -7), endDate). // Add buffer for date matching
+			Limit(500).
+			Offset(offset).
+			Execute(ctx)
+		if err != nil {
+			o.logProviderFetch("monarch_transactions", request, nil, err, time.Since(started), 0, 0)
+			return nil, fmt.Errorf("failed to fetch transactions: %w", err)
+		}
+		txList.Transactions = append(txList.Transactions, page.Transactions...)
+		if len(page.Transactions) < 500 {
+			break
+		}
 	}
 
 	// Filter for provider transactions (excluding splits)
