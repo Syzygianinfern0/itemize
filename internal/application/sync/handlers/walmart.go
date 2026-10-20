@@ -909,6 +909,55 @@ func (i refundOrderItem) GetCategory() string {
 	return i.original.GetCategory()
 }
 
+// inferredReturnOrder is a refund view of a purchase under its own ID, so the
+// return is recorded and deduplicated apart from the purchase. Its date is
+// the refund's date.
+type inferredReturnOrder struct {
+	*refundOrderView
+	id         string
+	refundDate time.Time
+}
+
+func (r *inferredReturnOrder) GetID() string      { return r.id }
+func (r *inferredReturnOrder) GetDate() time.Time { return r.refundDate }
+
+// InferredReturnID is the record ID used for a refund transaction matched to
+// a purchase by price.
+func InferredReturnID(refund *monarch.Transaction) string {
+	return "return:" + refund.ID
+}
+
+// NewInferredReturnOrder builds the order view for a refund that returned
+// items of purchase. The items are priced to the refund amount.
+func NewInferredReturnOrder(purchase WalmartOrder, items []providers.OrderItem, refund *monarch.Transaction) WalmartOrder {
+	return &inferredReturnOrder{
+		refundOrderView: newRefundOrderView(purchase, refund.Amount, items),
+		id:              InferredReturnID(refund),
+		refundDate:      refund.Date.Time,
+	}
+}
+
+// ProcessInferredReturn categorizes a refund transaction like the items it
+// returned (built with NewInferredReturnOrder). The note says the source
+// purchase was inferred from the price.
+func (h *WalmartHandler) ProcessInferredReturn(
+	ctx context.Context,
+	returnOrder WalmartOrder,
+	refund *monarch.Transaction,
+	purchaseDate time.Time,
+	catCategories []categorizer.Category,
+	monarchCategories []*monarch.TransactionCategory,
+	dryRun bool,
+) (*ProcessResult, error) {
+	h.logInfo("Matched Walmart refund to a purchase by price",
+		"refund_transaction_id", refund.ID,
+		"refund_amount", refund.Amount,
+		"purchase_date", purchaseDate.Format("2006-01-02"),
+		"item_count", len(returnOrder.GetItems()))
+	prefix := fmt.Sprintf("Return of %s purchase (matched by price)\n", purchaseDate.Format("2006-01-02"))
+	return h.categorizeAndApplySplits(ctx, returnOrder, refund, catCategories, monarchCategories, dryRun, prefix)
+}
+
 // IsWalmartOrder checks if an order is a Walmart order
 func IsWalmartOrder(order providers.Order) bool {
 	_, ok := order.(*walmartprovider.Order)

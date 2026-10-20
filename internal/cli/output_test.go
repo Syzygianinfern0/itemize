@@ -24,7 +24,7 @@ func TestPrintSyncSummaryReportsAmazonRefundOutcome(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, reader.Close())
 
-	assert.Contains(t, string(output), "Amazon refunds: Categorized=3 Left untouched=1")
+	assert.Contains(t, string(output), "Refunds: Categorized=3 Left untouched=1")
 	assert.Contains(t, string(output), "Sync completed successfully.")
 }
 

@@ -255,6 +255,10 @@ func (o *Orchestrator) Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 	}
 
+	if o.provider != nil && o.provider.Name() == "walmart" {
+		o.processInferredReturns(ctx, orders, providerTransactions, usedTransactionIDs, catCategories, monarchCategories, opts, result)
+	}
+
 	if returnsErr == nil && len(amazonReturns) > 0 {
 		// Amazon refunds are not proposed yet; a propose run previews them.
 		returnOpts := opts

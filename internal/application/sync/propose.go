@@ -95,9 +95,10 @@ func (a *monarchAdapter) takeCaptured() []*capturedWrite {
 	return captured
 }
 
-var chargePrefixPattern = regexp.MustCompile(`^Charge \d+ of \d+ \([^)\n]*\)\n`)
+var chargePrefixPattern = regexp.MustCompile(`^(Charge \d+ of \d+ \([^)\n]*\)|Return of [^\n]*\(matched by price\))\n`)
 
-// notePrefixOf extracts the "Charge i of N (...)" line handlers prepend.
+// notePrefixOf extracts the context line handlers prepend to notes
+// ("Charge i of N (...)" or "Return of ... (matched by price)").
 func notePrefixOf(notes string) string {
 	return chargePrefixPattern.FindString(notes)
 }

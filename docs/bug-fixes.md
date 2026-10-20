@@ -12,6 +12,26 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: Walmart in-store returns were never categorized
+
+**Description:**
+Positive Walmart transactions in Monarch (in-store returns, and some online refunds the ledger did not list) were never processed and stayed in whatever category Monarch guessed.
+
+**Test Case:**
+- `TestFind_SingleItemWithOrderTaxRate`, `TestFind_OneUnitOfAMultiple`, `TestFind_WholeOrderReturn`, `TestFind_OutsideReturnWindow`, `TestPick_AmbiguousMatchesAreNotGuessed`, `TestFind_MarkedReturnWinsWithLooserTax` (domain/returns)
+- `TestInferredReturns_ProposesRefundCategorizedLikeReturnedItem` (orchestrator)
+
+**Root Cause:**
+Refunds were only handled when an order's ledger listed a refund charge. An in-store return leaves the original receipt unchanged, and none of the Walmart endpoints itemize uses (purchase history, order details, ledger) list return receipts; adding new Walmart queries is out of bounds for this tool.
+
+**Fix Applied:**
+After a Walmart sync processes orders, each unused positive Walmart transaction is matched by price against purchases in the 90 days before it (`internal/domain/returns`): a whole order total, an item's line price, or one unit of a multiple, with and without that order's tax rate (±1.5¢). Items Walmart marked as returned win over price-only matches and may carry up to 12% tax. Only a single unambiguous candidate is used; otherwise the refund is left untouched and the reason is logged. The refund is categorized like the returned items, with notes starting `Return of <date> purchase (matched by price)`, and is recorded under its own ID (`return:<transaction id>`), so it is deduplicated and, in propose mode, reviewed separately.
+
+**Verification:**
+- New tests pass; `go test ./...` passes. On the evaluation data, the three refunds that followed one store visit each match exactly one item of that receipt.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-20: PayPal-paid walmart.com orders were never matched
 
 **Description:**

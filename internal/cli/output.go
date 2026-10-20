@@ -44,7 +44,7 @@ func PrintSyncSummary(result *sync.Result, store storage.Repository, dryRun bool
 		result.SkippedCount,
 		result.ErrorCount)
 	if result.RefundProcessedCount > 0 || result.RefundSkippedCount > 0 {
-		fmt.Printf("Amazon refunds: Categorized=%d Left untouched=%d\n",
+		fmt.Printf("Refunds: Categorized=%d Left untouched=%d\n",
 			result.RefundProcessedCount,
 			result.RefundSkippedCount)
 	}
