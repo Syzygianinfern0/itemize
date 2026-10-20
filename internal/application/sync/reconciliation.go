@@ -126,6 +126,13 @@ func (o *Orchestrator) reconcileStoredOrder(
 	}
 
 	if !stateMatches && !dryRun {
+		// The posted replacement may not have been in the fetched list (Get
+		// follows redirects); snapshot it now so the pre-write check applies.
+		// Reapplying itemize's own cached splits is expected to replace splits.
+		if o.monarchAdapter != nil {
+			o.monarchAdapter.rememberSeen(transaction)
+		}
+		ctx := withExistingSplitsAllowed(ctx)
 		if applyErr := o.applyCachedState(ctx, record, transaction); applyErr != nil {
 			return true, false, false, applyErr
 		}

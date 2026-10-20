@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -97,9 +98,10 @@ func NewOrchestrator(
 	var mAdapter *monarchAdapter
 	if clients != nil && clients.Monarch != nil {
 		mAdapter = &monarchAdapter{
-			client:  clients.Monarch,
-			storage: store,
-			logger:  logger,
+			client:       clients.Monarch,
+			storage:      store,
+			logger:       logger,
+			verifyWrites: true,
 		}
 	}
 
@@ -200,14 +202,83 @@ type monarchAdapter struct {
 	storage storage.Repository
 	logger  *slog.Logger
 	runID   int64
+
+	// verifyWrites makes every write first re-read the target transaction and
+	// refuse (ErrTransactionChanged) if it no longer matches the snapshot taken
+	// when it was fetched for matching. Set by NewOrchestrator.
+	verifyWrites bool
+	snapshots    map[string]TransactionSnapshot
+	written      map[string]bool
+}
+
+// rememberSeen records the state of transactions as fetched, for the
+// pre-write check.
+func (a *monarchAdapter) rememberSeen(txns ...*monarch.Transaction) {
+	if a.snapshots == nil {
+		a.snapshots = make(map[string]TransactionSnapshot, len(txns))
+	}
+	for _, txn := range txns {
+		if txn != nil {
+			if _, seen := a.snapshots[txn.ID]; !seen {
+				a.snapshots[txn.ID] = SnapshotOf(txn)
+			}
+		}
+	}
+}
+
+type allowExistingSplitsKey struct{}
+
+// withExistingSplitsAllowed marks writes that intentionally replace splits
+// itemize wrote earlier (reconciliation), so existing splits don't block them.
+func withExistingSplitsAllowed(ctx context.Context) context.Context {
+	return context.WithValue(ctx, allowExistingSplitsKey{}, true)
+}
+
+// verifyBeforeWrite re-reads transaction id and checks it still matches what
+// was seen. A transaction itemize already wrote in this run is not re-checked
+// (its updatedAt and splits changed because of that write).
+func (a *monarchAdapter) verifyBeforeWrite(ctx context.Context, id string) error {
+	if !a.verifyWrites || a.written[id] {
+		return nil
+	}
+	snap, ok := a.snapshots[id]
+	if !ok {
+		return fmt.Errorf("%w: no snapshot of %s was taken before writing", ErrTransactionChanged, id)
+	}
+	current, splits, err := FetchCurrent(ctx, a.client.Transactions, snap)
+	if err != nil {
+		return err
+	}
+	allowSplits, _ := ctx.Value(allowExistingSplitsKey{}).(bool)
+	if err := VerifyUnchanged(snap, current, splits, allowSplits); err != nil {
+		if a.logger != nil {
+			a.logger.Warn("Refusing Monarch write: transaction changed since it was read",
+				"transaction_id", id, "error", err)
+		}
+		return err
+	}
+	return nil
+}
+
+func (a *monarchAdapter) markWritten(id string) {
+	if a.written == nil {
+		a.written = make(map[string]bool)
+	}
+	a.written[id] = true
 }
 
 func (a *monarchAdapter) UpdateTransaction(ctx context.Context, id string, params *monarch.UpdateTransactionParams) error {
+	if err := a.verifyBeforeWrite(ctx, id); err != nil {
+		return err
+	}
 	update := func() error {
 		a.logAPICallIntent(ctx, id, "Transactions.Update", params)
 		start := time.Now()
 		updated, err := a.client.Transactions.Update(ctx, id, params)
 		a.logAPICallCompletion(ctx, id, "Transactions.Update", updated, err, time.Since(start))
+		if err == nil {
+			a.markWritten(id)
+		}
 		return err
 	}
 
@@ -239,9 +310,15 @@ func (a *monarchAdapter) GetSplits(ctx context.Context, id string) ([]*monarch.T
 }
 
 func (a *monarchAdapter) UpdateSplits(ctx context.Context, id string, splits []*monarch.TransactionSplit) error {
+	if err := a.verifyBeforeWrite(ctx, id); err != nil {
+		return err
+	}
 	a.logAPICallIntent(ctx, id, "Transactions.UpdateSplits", splits)
 	start := time.Now()
 	err := a.client.Transactions.UpdateSplits(ctx, id, splits)
+	if err == nil {
+		a.markWritten(id)
+	}
 	response := map[string]any{"ok": err == nil, "split_count": len(splits)}
 	a.logAPICallCompletion(ctx, id, "Transactions.UpdateSplits", response, err, time.Since(start))
 	return err

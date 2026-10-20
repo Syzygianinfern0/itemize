@@ -117,6 +117,10 @@ func (o *Orchestrator) fetchMonarchTransactions(ctx context.Context, opts Option
 		}
 	}
 
+	if o.monarchAdapter != nil {
+		o.monarchAdapter.rememberSeen(txList.Transactions...)
+	}
+
 	o.logger.Debug("Fetched transactions",
 		"total", len(txList.Transactions),
 		"provider_transactions", len(providerTransactions),

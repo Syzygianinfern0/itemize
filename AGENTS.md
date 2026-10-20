@@ -87,6 +87,10 @@ logger.Debug("Processing order", "id", order.ID)
 ```
 Debug = diagnostics, Info = normal ops, Warn = recoverable, Error = needs attention.
 
+**Never widen Monarch writes.** By default itemize may only set category, notes, review flag and
+splits. Deletes, creates and amount changes are refused by the write policy, and every write is
+re-validated against the transaction as it was read — see `docs/write-safety.md`.
+
 **Never bypass dedup casually.** SQLite tracks processed orders to prevent duplicate splits.
 `-force` is the only override and only when intentional — see `docs/deduplication-safety.md`.
 
@@ -110,4 +114,4 @@ in `config.go`, register in `internal/cli/providers.go`, add a handler in
 ## Deeper docs
 
 `docs/architecture.md` · `docs/testing.md` · `docs/adding-providers.md` ·
-`docs/deduplication-safety.md` · `docs/bug-fixes.md` · `docs/logging.md` · `docs/design-migrations.md`
+`docs/deduplication-safety.md` · `docs/write-safety.md` · `docs/bug-fixes.md` · `docs/logging.md` · `docs/design-migrations.md`

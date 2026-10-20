@@ -31,6 +31,7 @@ func NewClients(cfg *config.Config) (*Clients, error) {
 	if err != nil {
 		return nil, err
 	}
+	ApplyWritePolicy(mClient, cfg.DestructiveWritesAllowed())
 
 	chatClient, model, err := newChatClient(cfg, slog.Default())
 	if err != nil {
