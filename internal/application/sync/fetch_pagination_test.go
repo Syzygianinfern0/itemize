@@ -76,3 +76,33 @@ func TestFetchMonarchTransactions_ExactMultipleOf500(t *testing.T) {
 	assert.Equal(t, []int{0, 500, 1000}, txns.offsets)
 	assert.Len(t, got, 500)
 }
+
+// plaidOnlyTransactions returns one PayPal-intermediated Walmart charge whose
+// merchant Monarch normalized to PayPal.
+type plaidOnlyTransactions struct{ pagedTransactions }
+
+func (p *plaidOnlyTransactions) Query() monarch.TransactionQueryBuilder { return &plaidOnlyQuery{} }
+
+type plaidOnlyQuery struct{ pagedQuery }
+
+func (q *plaidOnlyQuery) Between(_, _ time.Time) monarch.TransactionQueryBuilder { return q }
+func (q *plaidOnlyQuery) Limit(int) monarch.TransactionQueryBuilder              { return q }
+func (q *plaidOnlyQuery) Offset(int) monarch.TransactionQueryBuilder             { return q }
+func (q *plaidOnlyQuery) Execute(context.Context) (*monarch.TransactionList, error) {
+	return &monarch.TransactionList{Transactions: []*monarch.Transaction{
+		{ID: "pp", Amount: -4.5, PlaidName: "PAYPAL *WALMART COM", Merchant: &monarch.Merchant{Name: "PayPal"}},
+		{ID: "other", Amount: -3, PlaidName: "PAYPAL *SOMESHOP", Merchant: &monarch.Merchant{Name: "PayPal"}},
+	}}, nil
+}
+
+func TestFetchMonarchTransactions_IncludesRetailerInBankDescription(t *testing.T) {
+	provider := new(MockProvider)
+	provider.On("DisplayName").Return("Walmart")
+	o := NewOrchestrator(provider, &clients.Clients{Monarch: &monarch.Client{Transactions: &plaidOnlyTransactions{}}}, nil,
+		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+
+	got, err := o.fetchMonarchTransactions(context.Background(), Options{LookbackDays: 30})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "pp", got[0].ID)
+}

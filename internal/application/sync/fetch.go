@@ -112,7 +112,10 @@ func (o *Orchestrator) fetchMonarchTransactions(ctx context.Context, opts Option
 		if tx.IsSplitTransaction {
 			continue
 		}
-		if tx.Merchant != nil && strings.Contains(strings.ToLower(tx.Merchant.Name), providerName) {
+		// Match the merchant, or the bank's raw description, which keeps the
+		// retailer for intermediaries (e.g. "PAYPAL *WALMART COM").
+		if (tx.Merchant != nil && strings.Contains(strings.ToLower(tx.Merchant.Name), providerName)) ||
+			strings.Contains(strings.ToLower(tx.PlaidName), providerName) {
 			providerTransactions = append(providerTransactions, tx)
 		}
 	}

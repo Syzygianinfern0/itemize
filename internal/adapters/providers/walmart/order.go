@@ -215,13 +215,11 @@ func (o *Order) GetFinalCharges() ([]float64, error) {
 		return nil, fmt.Errorf("order not yet charged (payment pending)")
 	}
 
-	// Collect positive charges from credit card payment methods only
-	// Gift cards don't appear in bank transactions, so skip them
+	// Collect positive charges from payment methods that reach the bank feed.
+	// Gift cards and store credit don't appear in bank transactions.
 	var positiveCharges []float64
 	for _, pm := range ledger.PaymentMethods {
-		// Only include credit card charges (bank transactions)
-		// Gift cards and store credit don't appear in bank statements
-		if pm.PaymentType != "CREDITCARD" {
+		if !isBankPayment(pm.PaymentType) {
 			if o.logger != nil {
 				o.logger.Debug("Skipping non-credit-card payment (won't appear in bank)",
 					"order_id", o.GetID(),
@@ -245,6 +243,18 @@ func (o *Order) GetFinalCharges() ([]float64, error) {
 	}
 
 	return positiveCharges, nil
+}
+
+// isBankPayment reports whether a Walmart payment type shows up in the bank
+// feed. Cards do directly; PayPal bills its funding card, which Monarch shows
+// as "PAYPAL *WALMART COM". Gift cards and store credit never do.
+func isBankPayment(paymentType string) bool {
+	switch paymentType {
+	case "CREDITCARD", "PAYPAL":
+		return true
+	default:
+		return false
+	}
 }
 
 // inStoreCreditCardCharge returns the single bank charge represented by a
@@ -278,7 +288,7 @@ func (o *Order) GetRefundCharges() ([]float64, error) {
 
 	var refunds []float64
 	for _, pm := range ledger.PaymentMethods {
-		if pm.PaymentType != "CREDITCARD" {
+		if !isBankPayment(pm.PaymentType) {
 			continue
 		}
 

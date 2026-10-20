@@ -12,6 +12,26 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: PayPal-paid walmart.com orders were never matched
+
+**Description:**
+Monarch transactions described as `PAYPAL *WALMART COM` (walmart.com orders paid through PayPal) stayed unmatched. The ledger logged `Skipping non-credit-card payment (won't appear in bank) ... payment_type=PAYPAL`, then fell back to the Walmart order total, which for a refunded order was $0.
+
+**Test Case:**
+- `TestPayPalChargesAreBankCharges`, `TestPayPalRefundsAreBankRefunds` (Walmart provider), `TestFetchMonarchTransactions_IncludesRetailerInBankDescription` (orchestrator)
+
+**Root Cause:**
+`GetFinalCharges` and `GetRefundCharges` only counted `CREDITCARD` ledger entries, treating everything else like gift cards. PayPal bills its funding card, so its charges and refunds do appear in the bank feed, with the same amounts as the ledger. Separately, the Monarch transaction filter only looked at the merchant name, which Monarch may normalize to "PayPal".
+
+**Fix Applied:**
+- `PAYPAL` ledger entries count as bank charges and refunds (gift cards and store credit still don't).
+- Monarch transactions are kept for a provider when either the merchant name or the bank description (`plaidName`) contains the provider name.
+
+**Verification:**
+- New tests fail on the old code and pass now; `go test ./...` passes.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-20: LLM categorization timed out on a slow response
 
 **Description:**
