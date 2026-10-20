@@ -4,6 +4,7 @@ package dto
 type StartSyncRequest struct {
 	Provider     string `json:"provider"`      // "walmart", "costco", "amazon"
 	DryRun       bool   `json:"dry_run"`       // Preview mode
+	Propose      bool   `json:"propose"`       // Store changes as proposals for review
 	LookbackDays int    `json:"lookback_days"` // How many days to look back (default 14)
 	MaxOrders    int    `json:"max_orders"`    // Max orders to process (0 = all)
 	Force        bool   `json:"force"`         // Force reprocess already processed orders
@@ -24,6 +25,7 @@ type SyncJobResponse struct {
 	Provider    string               `json:"provider"`
 	Status      string               `json:"status"`
 	DryRun      bool                 `json:"dry_run"`
+	Propose     bool                 `json:"propose"`
 	StartedAt   string               `json:"started_at"`
 	CompletedAt *string              `json:"completed_at,omitempty"`
 	Progress    SyncProgressResponse `json:"progress"`
@@ -35,6 +37,8 @@ type SyncJobResponse struct {
 type SyncProgressResponse struct {
 	CurrentPhase    string `json:"current_phase"`
 	TotalOrders     int    `json:"total_orders"`
+	CurrentIndex    int    `json:"current_index"`
+	CurrentOrderID  string `json:"current_order_id,omitempty"`
 	ProcessedOrders int    `json:"processed_orders"`
 	SkippedOrders   int    `json:"skipped_orders"`
 	ErroredOrders   int    `json:"errored_orders"`
@@ -43,9 +47,11 @@ type SyncProgressResponse struct {
 
 // SyncResultResponse represents the final result.
 type SyncResultResponse struct {
-	ProcessedCount int `json:"processed_count"`
-	SkippedCount   int `json:"skipped_count"`
-	ErrorCount     int `json:"error_count"`
+	ProcessedCount       int `json:"processed_count"`
+	SkippedCount         int `json:"skipped_count"`
+	ErrorCount           int `json:"error_count"`
+	RefundProcessedCount int `json:"refund_processed_count"`
+	RefundSkippedCount   int `json:"refund_skipped_count"`
 }
 
 // ActiveSyncsResponse lists active sync jobs.

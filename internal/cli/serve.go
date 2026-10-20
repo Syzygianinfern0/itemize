@@ -81,14 +81,22 @@ func RunServe(cfg *config.Config, flags *ServeFlags) error {
 
 	// Create API config
 	apiCfg := api.Config{
+		Host:           "127.0.0.1",
 		Port:           flags.Port,
 		AllowedOrigins: []string{"http://localhost:3000", "http://localhost:5173"},
+		LocalOnly:      true,
 	}
 
-	// Get monarch client for transactions API (may be nil if client init failed)
+	// Get monarch client for transactions API and applying approved proposals.
+	// Without an LLM key the sync service is off, but review and apply still
+	// work with a Monarch-only client (write policy installed either way).
 	var monarchClient *monarch.Client
 	if serviceClients != nil {
 		monarchClient = serviceClients.Monarch
+	} else if mc, mErr := clients.NewMonarchClient(cfg); mErr == nil {
+		monarchClient = mc
+	} else {
+		logger.Warn("no Monarch client; applying proposals is disabled", slog.Any("error", mErr))
 	}
 
 	// Create and start server
@@ -118,8 +126,9 @@ func RunServe(cfg *config.Config, flags *ServeFlags) error {
 	}()
 
 	// Log server info
+	fmt.Printf("Review UI: http://127.0.0.1:%d/\n", flags.Port)
 	if syncService != nil {
-		fmt.Printf("Sync API available at http://localhost:%d/api/sync\n", flags.Port)
+		fmt.Printf("Sync API available at http://127.0.0.1:%d/api/sync\n", flags.Port)
 	} else {
 		fmt.Printf("Sync API disabled (client initialization failed)\n")
 	}

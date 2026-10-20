@@ -144,6 +144,8 @@ type ProviderStats struct {
 
 // APICall represents a logged API call
 type APICall struct {
+	ID            int64
+	Timestamp     string
 	RunID         int64
 	OrderID       string
 	TransactionID string

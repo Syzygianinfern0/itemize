@@ -39,6 +39,17 @@ func (h *SyncHandler) StartSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The API never starts a sync that writes to Monarch: changes are only
+	// written by applying proposals the owner approved.
+	if !req.DryRun && !req.Propose {
+		h.WriteError(w, http.StatusBadRequest, dto.BadRequestError("set dry_run or propose: the API does not start syncs that write to Monarch (approve proposals and apply them instead)"))
+		return
+	}
+	if req.DryRun && req.Propose {
+		h.WriteError(w, http.StatusBadRequest, dto.BadRequestError("dry_run and propose cannot be combined"))
+		return
+	}
+
 	// Set defaults
 	if req.LookbackDays <= 0 {
 		req.LookbackDays = 14
@@ -48,6 +59,7 @@ func (h *SyncHandler) StartSync(w http.ResponseWriter, r *http.Request) {
 	serviceReq := service.SyncRequest{
 		Provider:     req.Provider,
 		DryRun:       req.DryRun,
+		Propose:      req.Propose,
 		LookbackDays: req.LookbackDays,
 		MaxOrders:    req.MaxOrders,
 		Force:        req.Force,
@@ -153,6 +165,7 @@ func toSyncJobResponse(job *service.SyncJob) dto.SyncJobResponse {
 		Provider:  job.Provider,
 		Status:    string(job.Status),
 		DryRun:    job.Request.DryRun,
+		Propose:   job.Request.Propose,
 		StartedAt: job.StartedAt.Format(time.RFC3339),
 		Progress:  toProgressResponse(job.Progress),
 	}
@@ -164,9 +177,11 @@ func toSyncJobResponse(job *service.SyncJob) dto.SyncJobResponse {
 
 	if job.Result != nil {
 		response.Result = &dto.SyncResultResponse{
-			ProcessedCount: job.Result.ProcessedCount,
-			SkippedCount:   job.Result.SkippedCount,
-			ErrorCount:     job.Result.ErrorCount,
+			ProcessedCount:       job.Result.ProcessedCount,
+			SkippedCount:         job.Result.SkippedCount,
+			ErrorCount:           job.Result.ErrorCount,
+			RefundProcessedCount: job.Result.RefundProcessedCount,
+			RefundSkippedCount:   job.Result.RefundSkippedCount,
 		}
 	}
 
@@ -183,6 +198,8 @@ func toProgressResponse(progress service.SyncProgress) dto.SyncProgressResponse 
 	return dto.SyncProgressResponse{
 		CurrentPhase:    progress.CurrentPhase,
 		TotalOrders:     progress.TotalOrders,
+		CurrentIndex:    progress.CurrentIndex,
+		CurrentOrderID:  progress.CurrentOrderID,
 		ProcessedOrders: progress.ProcessedOrders,
 		SkippedOrders:   progress.SkippedOrders,
 		ErroredOrders:   progress.ErroredOrders,

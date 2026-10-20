@@ -4,29 +4,39 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/eshaffer321/monarch-go/v2/pkg/monarch"
 	"github.com/eshaffer321/itemize/internal/api/handlers"
 	"github.com/eshaffer321/itemize/internal/api/middleware"
 	"github.com/eshaffer321/itemize/internal/application/service"
+	appsync "github.com/eshaffer321/itemize/internal/application/sync"
 	"github.com/eshaffer321/itemize/internal/infrastructure/storage"
+	"github.com/eshaffer321/monarch-go/v2/pkg/monarch"
 )
 
 // Config holds API server configuration.
 type Config struct {
+	// Host is the address to bind; empty means 127.0.0.1.
+	Host           string
 	Port           int
 	AllowedOrigins []string
+	// LocalOnly rejects non-loopback Host headers and state-changing requests
+	// without the X-Itemize-Request header (see middleware.LocalOnly).
+	LocalOnly bool
 }
 
 // DefaultConfig returns sensible defaults for the API server.
 func DefaultConfig() Config {
 	return Config{
+		Host:           "127.0.0.1",
 		Port:           8080,
 		AllowedOrigins: []string{"http://localhost:3000", "http://localhost:5173"},
+		LocalOnly:      true,
 	}
 }
 
@@ -39,6 +49,7 @@ type Server struct {
 	repo          storage.Repository
 	syncService   *service.SyncService
 	monarchClient *monarch.Client
+	applier       *appsync.Applier
 }
 
 // NewServer creates a new API server.
@@ -57,6 +68,9 @@ func NewServer(cfg Config, repo storage.Repository, syncService *service.SyncSer
 		syncService:   syncService,
 		monarchClient: monarchClient,
 	}
+	if monarchClient != nil {
+		s.applier = appsync.NewApplier(monarchClient, repo, logger)
+	}
 
 	s.setupMiddleware()
 	s.setupRoutes()
@@ -66,11 +80,15 @@ func NewServer(cfg Config, repo storage.Repository, syncService *service.SyncSer
 
 // setupMiddleware configures global middleware.
 func (s *Server) setupMiddleware() {
+	if s.config.LocalOnly {
+		s.router.Use(middleware.LocalOnly(s.config.AllowedOrigins))
+	}
+
 	// CORS
 	corsConfig := middleware.CORSConfig{
 		AllowedOrigins: s.config.AllowedOrigins,
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", middleware.RequestHeader},
 	}
 	s.router.Use(middleware.CORS(corsConfig))
 
@@ -83,6 +101,9 @@ func (s *Server) setupRoutes() {
 	// Health check (no /api prefix - for load balancers)
 	healthHandler := handlers.NewHealthHandler()
 	s.router.Get("/health", healthHandler.ServeHTTP)
+
+	// Review UI (embedded static files)
+	s.mountUI()
 
 	// API routes
 	s.router.Route("/api", func(r chi.Router) {
@@ -121,6 +142,21 @@ func (s *Server) setupRoutes() {
 			r.Delete("/sync/{jobId}", syncHandler.CancelSync)
 		}
 
+		// Review workflow: proposals, edits, approval, apply
+		review := handlers.NewReviewHandler(s.repo, s.monarchClient, s.applier)
+		r.Get("/review/overview", review.Overview)
+		r.Get("/review/orders", review.ListOrders)
+		r.Get("/review/orders/{id}", review.OrderReview)
+		r.Get("/proposals", review.ListProposals)
+		r.Get("/proposals/{id}", review.GetProposal)
+		r.Post("/proposals/decision", review.Decide)
+		r.Put("/proposals/{id}/items", review.EditItems)
+		r.Get("/categories", review.Categories)
+		r.Post("/apply/plan", review.ApplyPlan)
+		r.Post("/apply", review.Apply)
+		r.Get("/apply/{jobId}", review.GetApplyJob)
+		r.Get("/applied", review.Applied)
+
 		// Transactions (Monarch)
 		if s.monarchClient != nil {
 			transactionsHandler := handlers.NewTransactionsHandler(s.monarchClient)
@@ -132,7 +168,11 @@ func (s *Server) setupRoutes() {
 
 // Start starts the HTTP server.
 func (s *Server) Start() error {
-	addr := fmt.Sprintf(":%d", s.config.Port)
+	host := s.config.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(s.config.Port))
 
 	s.httpServer = &http.Server{
 		Addr:         addr,

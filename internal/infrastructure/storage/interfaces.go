@@ -163,6 +163,10 @@ type APICallRepository interface {
 	// GetAPICallsByOrderID retrieves all API calls for a specific order
 	GetAPICallsByOrderID(orderID string) ([]APICall, error)
 
+	// ListWriteCalls returns recent non-dry-run Monarch write calls
+	// (Transactions.Update, UpdateSplits, Delete), newest first.
+	ListWriteCalls(limit int) ([]APICall, error)
+
 	// GetAPICallsByRunID retrieves all API calls for a specific sync run
 	GetAPICallsByRunID(runID int64) ([]APICall, error)
 

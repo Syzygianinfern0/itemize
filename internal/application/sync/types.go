@@ -19,8 +19,10 @@ import (
 
 // ProgressUpdate represents a progress update during sync
 type ProgressUpdate struct {
-	Phase           string // "fetching_orders", "processing_orders"
+	Phase           string // "fetching_orders", "fetching_transactions", "processing_orders", "processing_refunds"
 	TotalOrders     int
+	CurrentIndex    int // 1-based index of the order being processed
+	CurrentOrderID  string
 	ProcessedOrders int
 	SkippedOrders   int
 	ErroredOrders   int

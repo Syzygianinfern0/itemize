@@ -803,6 +803,7 @@ func (s *Storage) GetAPICallsByOrderID(orderID string) ([]APICall, error) {
 		if transactionID.Valid {
 			call.TransactionID = transactionID.String
 		}
+		call.Timestamp = timestamp
 		calls = append(calls, call)
 	}
 
@@ -852,6 +853,37 @@ func (s *Storage) GetAPICallsByRunID(runID int64) ([]APICall, error) {
 		calls = append(calls, call)
 	}
 
+	return calls, rows.Err()
+}
+
+// ListWriteCalls returns recent non-dry-run Monarch write calls, newest first.
+func (s *Storage) ListWriteCalls(limit int) ([]APICall, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`
+		SELECT id, COALESCE(run_id, 0), COALESCE(order_id, ''), method, COALESCE(request_json, ''),
+		       COALESCE(response_json, ''), COALESCE(error, ''), COALESCE(duration_ms, 0), CAST(timestamp AS TEXT),
+		       COALESCE(transaction_id, ''), COALESCE(dry_run, 0), COALESCE(phase, 'completed')
+		FROM api_calls
+		WHERE COALESCE(dry_run, 0) = 0
+		  AND method IN ('Transactions.Update', 'Transactions.UpdateSplits', 'Transactions.Delete')
+		ORDER BY id DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var calls []APICall
+	for rows.Next() {
+		var call APICall
+		if err := rows.Scan(&call.ID, &call.RunID, &call.OrderID, &call.Method, &call.RequestJSON, &call.ResponseJSON,
+			&call.Error, &call.DurationMs, &call.Timestamp, &call.TransactionID, &call.DryRun, &call.Phase); err != nil {
+			return nil, err
+		}
+		calls = append(calls, call)
+	}
 	return calls, rows.Err()
 }
 

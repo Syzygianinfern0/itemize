@@ -21,7 +21,9 @@ func newTestServer(t *testing.T) (*api.Server, *storage.MockRepository) {
 	t.Helper()
 	repo := storage.NewMockRepository()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	server := api.NewServer(api.DefaultConfig(), repo, nil, nil, logger) // nil syncService, nil monarchClient for read-only tests
+	cfg := api.DefaultConfig()
+	cfg.LocalOnly = false // httptest requests use Host example.com; LocalOnly is covered in review_api_test.go
+	server := api.NewServer(cfg, repo, nil, nil, logger) // nil syncService, nil monarchClient for read-only tests
 	return server, repo
 }
 

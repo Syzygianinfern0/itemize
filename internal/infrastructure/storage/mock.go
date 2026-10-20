@@ -266,6 +266,26 @@ func (m *MockRepository) GetAPICallsByRunID(runID int64) ([]APICall, error) {
 	return result, nil
 }
 
+// ListWriteCalls returns logged non-dry-run write calls, newest first.
+func (m *MockRepository) ListWriteCalls(limit int) ([]APICall, error) {
+	var out []APICall
+	for i := len(m.apiCalls) - 1; i >= 0; i-- {
+		call := m.apiCalls[i]
+		if call.DryRun {
+			continue
+		}
+		switch call.Method {
+		case "Transactions.Update", "Transactions.UpdateSplits", "Transactions.Delete":
+			call.ID = int64(i + 1)
+			out = append(out, call)
+		}
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 // LogProviderFetch logs a provider fetch snapshot.
 func (m *MockRepository) LogProviderFetch(fetch *ProviderFetchLog) error {
 	if fetch == nil {

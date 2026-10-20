@@ -46,3 +46,14 @@ Review with `itemize proposals` (`-approve`, `-reject`, `-reset` take comma-sepa
 3. marks the proposal `applied` (or `failed` with the error).
 
 When every proposal of an order is `applied` or `rejected` (with at least one applied), the order's record becomes `success`, so later syncs skip it.
+
+## Review UI
+
+`itemize serve -port 8085` serves the review UI at `http://127.0.0.1:8085/` (embedded in the binary; plain HTML/CSS/JS, no build step). Screens: review queue (bulk approve/reject, apply with a final confirmation listing every write), orders (filter by status, type, date; unmatched reasons), order detail (items, ledger charges, before → after per transaction, per-item category edits with a live split preview), runs (start a propose or dry run, live per-order progress, history) and the applied log (writes from `api_calls`, with the before-state of the proposal they came from).
+
+Safety properties:
+
+- The server binds to `127.0.0.1` only and rejects requests whose `Host` is not a loopback name (DNS rebinding).
+- State-changing requests need an `X-Itemize-Request` header and a same-origin (or configured dev) `Origin`, so other websites cannot approve or apply anything (CSRF).
+- `POST /api/sync` only starts dry-run or propose runs; the API never starts a run that writes to Monarch.
+- `POST /api/apply` takes an explicit list of approved proposal IDs, and runs the same re-validating Applier as `itemize apply`.

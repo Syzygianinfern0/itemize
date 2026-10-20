@@ -186,7 +186,14 @@ func (o *Orchestrator) Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 	}
 
+	progress := func(update ProgressUpdate) {
+		if opts.ProgressCallback != nil {
+			opts.ProgressCallback(update)
+		}
+	}
+
 	// 2. Fetch orders from provider
+	progress(ProgressUpdate{Phase: "fetching_orders"})
 	orders, err := o.fetchOrders(ctx, opts)
 	if err != nil {
 		o.completeFailedRun(1)
@@ -198,6 +205,7 @@ func (o *Orchestrator) Run(ctx context.Context, opts Options) (*Result, error) {
 		return result, nil // Testing mode
 	}
 
+	progress(ProgressUpdate{Phase: "fetching_transactions", TotalOrders: len(orders)})
 	providerTransactions, err := o.fetchMonarchTransactions(ctx, opts)
 	if err != nil {
 		o.completeFailedRun(1)
@@ -235,6 +243,13 @@ func (o *Orchestrator) Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 
 		o.logger.Debug("Processing order", "index", i+1, "total", len(orders))
+		progress(ProgressUpdate{
+			Phase: "processing_orders", TotalOrders: len(orders), CurrentIndex: i + 1, CurrentOrderID: order.GetID(),
+			ProcessedOrders: result.ProcessedCount, SkippedOrders: result.SkippedCount, ErroredOrders: result.ErrorCount,
+		})
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 
 		processed, skipped, err := o.processOrder(ctx, order, providerTransactions, usedTransactionIDs, catCategories, monarchCategories, opts)
 		if err != nil {
@@ -255,6 +270,10 @@ func (o *Orchestrator) Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 	}
 
+	progress(ProgressUpdate{
+		Phase: "processing_refunds", TotalOrders: len(orders), CurrentIndex: len(orders),
+		ProcessedOrders: result.ProcessedCount, SkippedOrders: result.SkippedCount, ErroredOrders: result.ErrorCount,
+	})
 	if o.provider != nil && o.provider.Name() == "walmart" {
 		o.processInferredReturns(ctx, orders, providerTransactions, usedTransactionIDs, catCategories, monarchCategories, opts, result)
 	}

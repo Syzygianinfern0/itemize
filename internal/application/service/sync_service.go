@@ -42,6 +42,7 @@ const (
 type SyncRequest struct {
 	Provider     string // "walmart", "costco", "amazon"
 	DryRun       bool
+	Propose      bool // store changes as proposals for review; nothing is written
 	LookbackDays int
 	MaxOrders    int
 	Force        bool
@@ -51,8 +52,10 @@ type SyncRequest struct {
 
 // SyncProgress holds real-time progress information.
 type SyncProgress struct {
-	CurrentPhase    string    // "pending", "initializing", "fetching_orders", "processing_orders", "completed", "failed"
+	CurrentPhase    string // "pending", "initializing", "fetching_orders", "processing_orders", "completed", "failed"
 	TotalOrders     int
+	CurrentIndex    int
+	CurrentOrderID  string
 	ProcessedOrders int
 	SkippedOrders   int
 	ErroredOrders   int
@@ -78,11 +81,11 @@ type ProviderFactory func(cfg *config.Config, verbose bool) (providers.OrderProv
 
 // SyncService manages sync operations.
 type SyncService struct {
-	cfg              *config.Config
-	clients          *clients.Clients
-	storage          storage.Repository
-	logger           *slog.Logger
-	providerFactory  map[string]ProviderFactory
+	cfg             *config.Config
+	clients         *clients.Clients
+	storage         storage.Repository
+	logger          *slog.Logger
+	providerFactory map[string]ProviderFactory
 
 	// Job management
 	jobs      map[string]*SyncJob
@@ -161,6 +164,7 @@ func (s *SyncService) StartSync(_ context.Context, req SyncRequest) (string, err
 		"job_id", jobID,
 		"provider", req.Provider,
 		"dry_run", req.DryRun,
+		"propose", req.Propose,
 		"lookback_days", req.LookbackDays,
 	)
 
@@ -273,6 +277,7 @@ func (s *SyncService) runSyncJob(ctx context.Context, job *SyncJob) {
 	// Convert request to options with progress callback
 	opts := appsync.Options{
 		DryRun:       job.Request.DryRun,
+		Propose:      job.Request.Propose,
 		LookbackDays: job.Request.LookbackDays,
 		MaxOrders:    job.Request.MaxOrders,
 		Force:        job.Request.Force,
@@ -318,6 +323,8 @@ func (s *SyncService) updateJobProgress(jobID string, update appsync.ProgressUpd
 	if job, exists := s.jobs[jobID]; exists {
 		job.Progress.CurrentPhase = update.Phase
 		job.Progress.TotalOrders = update.TotalOrders
+		job.Progress.CurrentIndex = update.CurrentIndex
+		job.Progress.CurrentOrderID = update.CurrentOrderID
 		job.Progress.ProcessedOrders = update.ProcessedOrders
 		job.Progress.SkippedOrders = update.SkippedOrders
 		job.Progress.ErroredOrders = update.ErroredOrders
