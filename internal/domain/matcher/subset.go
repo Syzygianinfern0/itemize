@@ -157,3 +157,28 @@ func containsAnyAmount(txns []*monarch.Transaction, amounts []float64, tolerance
 	}
 	return false
 }
+
+// AnySubsetSums reports whether some 1..maxSize of amounts (absolute values)
+// sum to any target within tolerance.
+func AnySubsetSums(amounts []float64, targets []float64, maxSize int, tolerance float64) bool {
+	var search func(start, size int, sum float64) bool
+	search = func(start, size int, sum float64) bool {
+		if size > 0 {
+			for _, target := range targets {
+				if math.Abs(sum-target) <= tolerance {
+					return true
+				}
+			}
+		}
+		if size == maxSize {
+			return false
+		}
+		for i := start; i < len(amounts); i++ {
+			if search(i+1, size+1, sum+math.Abs(amounts[i])) {
+				return true
+			}
+		}
+		return false
+	}
+	return search(0, 0, 0)
+}

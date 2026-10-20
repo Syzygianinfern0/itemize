@@ -302,6 +302,24 @@ func (o *Order) GetRefundCharges() ([]float64, error) {
 	return refunds, nil
 }
 
+// LedgerSkippable reports whether this order's ledger can be skipped when no
+// Monarch transactions add up to ChargeTargets: it was paid with a single
+// card or PayPal (so its charges sum to one of the targets) and no item is
+// marked returned (so no ledger refund is expected).
+func (o *Order) LedgerSkippable() bool {
+	if len(o.walmartOrder.PaymentMethods) != 1 || !isBankPayment(o.walmartOrder.PaymentMethods[0].PaymentType) {
+		return false
+	}
+	return len(o.walmartOrder.GetRefundedItems()) == 0
+}
+
+// ChargeTargets returns the amounts this order's bank charges can add up to:
+// the order total, and subtotal + tax + tip with and without fees.
+func (o *Order) ChargeTargets() []float64 {
+	base := o.GetSubtotal() + o.GetTax() + o.GetTip()
+	return []float64{o.GetTotal(), base, base + o.GetFees()}
+}
+
 // GetRefundItems returns the item(s) that Walmart explicitly marked as refunded.
 func (o *Order) GetRefundItems() ([]providers.OrderItem, error) {
 	refunded := o.walmartOrder.GetRefundedItems()

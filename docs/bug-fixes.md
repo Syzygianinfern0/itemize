@@ -12,6 +12,26 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: Syncs spent most of their time on ledger calls for orders that could not match
+
+**Description:**
+A one-year Walmart run took about 50 minutes (about 28 s per order), dominated by Walmart's ledger endpoint, which is throttled to roughly one call per 20–30 s. On a shared Walmart account many orders have no Monarch counterpart at all.
+
+**Test Case:**
+- `TestLedgerSkip_NoCandidateSkipsLedger`, `TestLedgerSkip_SingleOrMultiChargeCandidateFetchesLedger`, `TestLedgerSkip_NotSkippableOrdersAlwaysFetchLedger`, `TestLedgerSkip_UsedTransactionsAreNotCandidates` (handler), `TestLedgerSkippable` (provider), `TestAnySubsetSums` (matcher)
+
+**Fix Applied:**
+Before fetching an order's ledger, the Walmart handler checks whether any Monarch transaction could be its charge. It skips the ledger (and the order, with reason `no Monarch transaction for $X`) only when all of these hold:
+- the order was paid with a single card or PayPal (no gift card or split tender, so its charges sum to the order total or subtotal + tax + tip, with or without fees);
+- no item is marked returned (so the ledger is not needed for a refund);
+- no 1–4 unused purchase transactions dated from 5 days before to 14 days after the order add up to one of those totals.
+
+**Verification:**
+- New tests pass; `go test ./...` passes.
+- Replayed against the evaluation data, the rule skips the ledger for 41 of 95 orders and none of the 50 orders that matched.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-20: Walmart in-store returns were never categorized
 
 **Description:**

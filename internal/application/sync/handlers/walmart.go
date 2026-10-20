@@ -96,6 +96,14 @@ func (h *WalmartHandler) ProcessOrder(
 	monarchCategories []*monarch.TransactionCategory,
 	dryRun bool,
 ) (*ProcessResult, error) {
+	// Walmart's ledger endpoint is throttled to about one call per 20-30 s.
+	// When no Monarch transactions could be this order's charges, skip it.
+	if reason, skip := ledgerNotNeeded(order, monarchTxns, usedTxnIDs); skip {
+		h.logInfo("Skipping order - no Monarch transaction matches its total (ledger not fetched)",
+			"order_id", order.GetID(), "order_total", order.GetTotal())
+		return &ProcessResult{Skipped: true, SkipReason: reason}, nil
+	}
+
 	// Step 1: Get bank charges from ledger
 	bankCharges, err := order.GetFinalCharges()
 	refundCharges := h.getRefundCharges(order)
@@ -162,6 +170,52 @@ func (h *WalmartHandler) ProcessOrder(
 		}
 	}
 	return result, nil
+}
+
+// ledgerSkippableOrder is implemented by Walmart orders that can tell when
+// their ledger is not needed (see walmart.Order.LedgerSkippable).
+type ledgerSkippableOrder interface {
+	LedgerSkippable() bool
+	ChargeTargets() []float64
+}
+
+// Ledger skip window: charges post from a few days before the order date (in
+// the bank feed's terms) to two weeks after it for staggered shipments.
+const (
+	ledgerSkipDaysBefore = 5
+	ledgerSkipDaysAfter  = 14
+	ledgerSkipMaxCharges = 4
+	ledgerSkipMaxPool    = 40
+)
+
+// ledgerNotNeeded reports whether an order cannot match anything in Monarch
+// without its ledger: it was paid by one card or PayPal with no returned
+// items, and no 1-4 unused purchase transactions near its date add up to its
+// total. Its reason names the amount, for the review UI.
+func ledgerNotNeeded(order WalmartOrder, monarchTxns []*monarch.Transaction, usedTxnIDs map[string]bool) (string, bool) {
+	hints, ok := order.(ledgerSkippableOrder)
+	if !ok || !hints.LedgerSkippable() || order.GetDate().IsZero() {
+		return "", false
+	}
+	earliest := order.GetDate().AddDate(0, 0, -ledgerSkipDaysBefore)
+	latest := order.GetDate().AddDate(0, 0, ledgerSkipDaysAfter)
+	var pool []float64
+	for _, txn := range monarchTxns {
+		if txn == nil || txn.Amount >= 0 || usedTxnIDs[txn.ID] {
+			continue
+		}
+		if txn.Date.Before(earliest) || txn.Date.After(latest) {
+			continue
+		}
+		pool = append(pool, txn.Amount)
+	}
+	if len(pool) > ledgerSkipMaxPool {
+		return "", false
+	}
+	if matcher.AnySubsetSums(pool, hints.ChargeTargets(), ledgerSkipMaxCharges, 0.011) {
+		return "", false
+	}
+	return fmt.Sprintf("no Monarch transaction for $%.2f", order.GetTotal()), true
 }
 
 func (h *WalmartHandler) getRefundItems(order WalmartOrder, refundCount int) []providers.OrderItem {

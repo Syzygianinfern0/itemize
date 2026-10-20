@@ -34,3 +34,17 @@ func TestPayPalRefundsAreBankRefunds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []float64{4.50}, refunds)
 }
+
+func TestLedgerSkippable(t *testing.T) {
+	card := []walmartclient.OrderPaymentMethod{{PaymentType: "CREDITCARD"}}
+	order := &Order{walmartOrder: &walmartclient.Order{ID: "A", PaymentMethods: card}}
+	assert.True(t, order.LedgerSkippable())
+
+	giftAndCard := &Order{walmartOrder: &walmartclient.Order{ID: "B", PaymentMethods: append(card, walmartclient.OrderPaymentMethod{PaymentType: "GIFTCARD"})}}
+	assert.False(t, giftAndCard.LedgerSkippable(), "a gift card makes the charge differ from the total")
+
+	returned := &Order{walmartOrder: &walmartclient.Order{ID: "C", PaymentMethods: card, Groups: []walmartclient.OrderGroup{{
+		Categories: []walmartclient.OrderCategory{{Items: []walmartclient.OrderItem{{ID: "1", ReturnID: "r1"}}}},
+	}}}}
+	assert.False(t, returned.LedgerSkippable(), "a returned item means the ledger may list a refund")
+}
