@@ -12,6 +12,28 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: Split categories were attached to the wrong items
+
+**Description:**
+In a dry run, multi-category splits put items under the wrong categories (clothing under Groceries, a drink under Clothing, two items' categories swapped). It got worse as the categorization cache filled during a run.
+
+**Test Case:**
+- `TestCategorizeItems_CachedAndUncachedMixKeepsInputOrder`, `TestCategorizeItems_LLMReordersOutput`, `TestCategorizeItems_LLMOmitsItemIsAskedAgain`, `TestCategorizeItems_LLMKeepsOmittingItemFails`, `TestCategorizeItems_DuplicateItemsEachGetACategory` (categorizer)
+- `TestCreateSplits_JoinsOnItemIndexNotPosition`, `TestCreateSplits_MissingCategorizationIsAnError`, `TestSplitter_RecategorizesWhenSameOrderHasDifferentItems` (splitter)
+
+**Root Cause:**
+`Categorizer.CategorizeItems` returned cached items first and LLM results after them, and the LLM could also reorder or drop entries. The splitter paired results with `order.GetItems()` by position, so any order that mixed cached and new items, or got a reordered response, shifted categories onto other items. The splitter's one-order cache was keyed only on the order ID, so a Walmart refund view (same ID, only the refunded items) reused the full order's categorization.
+
+**Fix Applied:**
+- The prompt numbers items and asks for `item_index`. `CategorizeItems` returns exactly one result per input item, in input order, with `ItemIndex` set. Items the LLM omits or gives an unknown category are re-sent once; if still missing, categorization fails instead of returning a partial result. Cached IDs for categories that no longer exist are ignored.
+- The splitter joins on `ItemIndex` (falling back to exact name matching for categorizers that don't set it), never on position, and errors when an item has no category. Its cache key includes the item list.
+- Split amounts are now allocated in proportion to each category's item subtotal, settled cent by cent, and splits come out in a deterministic order.
+
+**Verification:**
+- New tests fail on the old code and pass now; `go test ./...` passes.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-14: CI and release builds used a Go release with unpatched net/http, crypto/tls, and x/net vulnerabilities
 
 **Description:**

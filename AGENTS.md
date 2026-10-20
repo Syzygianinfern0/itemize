@@ -64,7 +64,7 @@ Key entry points:
 - Orchestrator — `internal/application/sync/orchestrator.go`
 - Matcher (amount ±$0.01, date ±5 days) — `internal/domain/matcher/matcher.go`
 - Categorizer (model set here today) — `internal/domain/categorizer/categorizer.go`
-- Splitter (tax is proportional: `category_subtotal/total_subtotal * total_tax`) — `internal/domain/splitter/splitter.go`
+- Splitter (each category gets `category_subtotal/total_subtotal` of the transaction amount, so tax is proportional; categorizations are joined to items by `ItemIndex`, never position) — `internal/domain/splitter/splitter.go`
 - Storage / dedup — `internal/infrastructure/storage/sqlite.go`
 
 ## Conventions agents must follow

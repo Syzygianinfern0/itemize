@@ -23,8 +23,10 @@ type Category struct {
 	Name string `json:"name"`
 }
 
-// ItemCategorization represents the categorization result for a single item
+// ItemCategorization represents the categorization result for a single item.
+// ItemIndex is the item's position in the slice passed to CategorizeItems.
 type ItemCategorization struct {
+	ItemIndex    int     `json:"item_index"`
 	ItemName     string  `json:"item_name"`
 	CategoryID   string  `json:"category_id"`
 	CategoryName string  `json:"category_name"`
@@ -34,6 +36,20 @@ type ItemCategorization struct {
 // CategorizationResult contains all categorization results
 type CategorizationResult struct {
 	Categorizations []ItemCategorization `json:"categorizations"`
+}
+
+// llmCategorization is one entry of the LLM's JSON response. ItemNumber is the
+// 1-based number the prompt gave the item.
+type llmCategorization struct {
+	ItemNumber   int     `json:"item_index"`
+	ItemName     string  `json:"item_name"`
+	CategoryID   string  `json:"category_id"`
+	CategoryName string  `json:"category_name"`
+	Confidence   float64 `json:"confidence"`
+}
+
+type llmResponse struct {
+	Categorizations []llmCategorization `json:"categorizations"`
 }
 
 // Chat-completion request/response types.
@@ -99,92 +115,126 @@ func NewCategorizer(client ChatClient, cache Cache, model string) *Categorizer {
 
 const DefaultModel = "gpt-6-luna"
 
-// CategorizeItems categorizes a list of items using available categories
+// llmAttempts is how many times uncategorized items are sent to the LLM. Items
+// the LLM omits or gives an unknown category are re-sent once.
+const llmAttempts = 2
+
+// CategorizeItems categorizes a list of items using available categories.
+//
+// The result has exactly one entry per input item, in input order, with
+// ItemIndex set to the item's position. Cached and LLM results are merged by
+// position, never appended, so callers can pair results with items safely.
+// If the LLM still leaves an item uncategorized after a retry, an error is
+// returned rather than a partial result.
 func (c *Categorizer) CategorizeItems(ctx context.Context, items []Item, categories []Category) (*CategorizationResult, error) {
 	if len(items) == 0 {
 		return &CategorizationResult{Categorizations: []ItemCategorization{}}, nil
 	}
 
-	result := &CategorizationResult{
-		Categorizations: make([]ItemCategorization, 0, len(items)),
-	}
-
-	// Build category map for quick lookup
-	categoryMap := make(map[string]Category)
-	for _, cat := range categories {
-		categoryMap[cat.ID] = cat
-	}
-
-	// Separate cached and uncached items
-	var uncachedItems []Item
-	for _, item := range items {
-		normalizedName := c.normalizeItemName(item.Name)
-
-		// Check cache
-		if categoryID, found := c.cache.Get(normalizedName); found {
-			// Use cached categorization
-			cat := categoryMap[categoryID]
-			result.Categorizations = append(result.Categorizations, ItemCategorization{
-				ItemName:     item.Name,
-				CategoryID:   categoryID,
-				CategoryName: cat.Name,
-				Confidence:   1.0, // 100% confidence for cached items
-			})
-		} else {
-			uncachedItems = append(uncachedItems, item)
-		}
-	}
-
-	// If all items were cached, return early
-	if len(uncachedItems) == 0 {
-		return result, nil
-	}
-
-	// Call the LLM for uncached items
-	llmResult, err := c.callLLM(ctx, uncachedItems, categories)
-	if err != nil {
-		return nil, fmt.Errorf("LLM categorization failed: %w", err)
-	}
-
-	// Build a lookup so we can validate what the LLM returned
 	categoryByID := make(map[string]Category, len(categories))
 	categoryByName := make(map[string]Category, len(categories))
-	for _, c := range categories {
-		categoryByID[c.ID] = c
-		categoryByName[strings.ToLower(c.Name)] = c
+	for _, cat := range categories {
+		categoryByID[cat.ID] = cat
+		categoryByName[strings.ToLower(cat.Name)] = cat
 	}
 
-	// Truncate extra entries — LLMs occasionally hallucinate more categorizations
-	// than items sent. Extra entries corrupt category-group detection downstream.
-	llmCategorizations := llmResult.Categorizations
-	if len(llmCategorizations) > len(uncachedItems) {
-		llmCategorizations = llmCategorizations[:len(uncachedItems)]
-	}
-
-	// Process LLM results
-	for _, cat := range llmCategorizations {
-		// If the LLM returned an ID that isn't in the Monarch category list,
-		// try to recover via name match before falling back to empty.
-		if _, ok := categoryByID[cat.CategoryID]; !ok {
-			if matched, ok := categoryByName[strings.ToLower(cat.CategoryName)]; ok {
-				cat.CategoryID = matched.ID
-				cat.CategoryName = matched.Name
-			} else {
-				// No valid match — zero out the ID so callers know to skip category update
-				cat.CategoryID = ""
+	assigned := make([]*ItemCategorization, len(items))
+	var pending []int
+	for i, item := range items {
+		if categoryID, found := c.cache.Get(c.normalizeItemName(item.Name)); found {
+			// A cached ID for a category that no longer exists is ignored.
+			if cat, ok := categoryByID[categoryID]; ok {
+				assigned[i] = &ItemCategorization{
+					ItemIndex:    i,
+					ItemName:     item.Name,
+					CategoryID:   cat.ID,
+					CategoryName: cat.Name,
+					Confidence:   1.0, // 100% confidence for cached items
+				}
+				continue
 			}
 		}
-
-		// Only cache valid IDs so future lookups don't reuse a bad value
-		if cat.CategoryID != "" {
-			normalizedName := c.normalizeItemName(cat.ItemName)
-			c.cache.Set(normalizedName, cat.CategoryID)
-		}
-
-		result.Categorizations = append(result.Categorizations, cat)
+		pending = append(pending, i)
 	}
 
+	for attempt := 0; attempt < llmAttempts && len(pending) > 0; attempt++ {
+		batch := make([]Item, len(pending))
+		for k, idx := range pending {
+			batch[k] = items[idx]
+		}
+
+		llmResult, err := c.callLLM(ctx, batch, categories)
+		if err != nil {
+			return nil, fmt.Errorf("LLM categorization failed: %w", err)
+		}
+
+		for _, entry := range llmResult.Categorizations {
+			k := c.resolveBatchPosition(entry, batch, pending, assigned)
+			if k < 0 {
+				continue
+			}
+			cat, ok := categoryByID[entry.CategoryID]
+			if !ok {
+				// Recover an invented ID via the category name; otherwise leave
+				// the item pending so it is asked again.
+				if cat, ok = categoryByName[strings.ToLower(entry.CategoryName)]; !ok {
+					continue
+				}
+			}
+			idx := pending[k]
+			assigned[idx] = &ItemCategorization{
+				ItemIndex:    idx,
+				ItemName:     items[idx].Name,
+				CategoryID:   cat.ID,
+				CategoryName: cat.Name,
+				Confidence:   entry.Confidence,
+			}
+			c.cache.Set(c.normalizeItemName(items[idx].Name), cat.ID)
+		}
+
+		var still []int
+		for _, idx := range pending {
+			if assigned[idx] == nil {
+				still = append(still, idx)
+			}
+		}
+		pending = still
+	}
+
+	if len(pending) > 0 {
+		names := make([]string, len(pending))
+		for k, idx := range pending {
+			names[k] = fmt.Sprintf("%q", items[idx].Name)
+		}
+		return nil, fmt.Errorf("LLM categorization incomplete: no valid category for %d item(s): %s",
+			len(pending), strings.Join(names, ", "))
+	}
+
+	result := &CategorizationResult{Categorizations: make([]ItemCategorization, len(items))}
+	for i, cat := range assigned {
+		result.Categorizations[i] = *cat
+	}
 	return result, nil
+}
+
+// resolveBatchPosition returns the position in batch that an LLM entry refers
+// to, or -1. It prefers the item number from the prompt and falls back to an
+// exact (case-insensitive) name match. Items that already have a category are
+// never reassigned, so duplicate entries are ignored.
+func (c *Categorizer) resolveBatchPosition(entry llmCategorization, batch []Item, pending []int, assigned []*ItemCategorization) int {
+	if k := entry.ItemNumber - 1; k >= 0 && k < len(batch) {
+		if assigned[pending[k]] == nil {
+			return k
+		}
+		return -1
+	}
+	name := c.normalizeItemName(entry.ItemName)
+	for k, item := range batch {
+		if assigned[pending[k]] == nil && c.normalizeItemName(item.Name) == name {
+			return k
+		}
+	}
+	return -1
 }
 
 // Retry configuration
@@ -215,7 +265,7 @@ func isRetryableError(err error) bool {
 }
 
 // callLLM makes the actual API call to the LLM with retry logic
-func (c *Categorizer) callLLM(ctx context.Context, items []Item, categories []Category) (*CategorizationResult, error) {
+func (c *Categorizer) callLLM(ctx context.Context, items []Item, categories []Category) (*llmResponse, error) {
 	prompt := c.buildPrompt(items, categories)
 
 	request := ChatCompletionRequest{
@@ -264,7 +314,7 @@ func (c *Categorizer) callLLM(ctx context.Context, items []Item, categories []Ca
 		}
 
 		// Parse JSON response
-		var result CategorizationResult
+		var result llmResponse
 		if err := json.Unmarshal([]byte(response.Choices[0].Message.Content), &result); err != nil {
 			return nil, fmt.Errorf("failed to parse LLM response: %w", err)
 		}
@@ -311,7 +361,7 @@ Available categories (use ONLY these exact IDs):
 %s
 
 IMPORTANT Instructions:
-1. Match each item to the MOST appropriate category from the list above
+1. Match each item to the MOST appropriate category from the list above. Return exactly one entry per numbered item, with "item_index" set to the item's number
 2. You MUST use the exact category_id values shown in the list — do NOT invent IDs or use words like "Uncategorized"
 3. If no category is a good fit, pick the closest one available
 4. Distinguish between different types of items:
@@ -326,6 +376,7 @@ Return the result as a JSON object with this structure:
 {
   "categorizations": [
     {
+      "item_index": 1,
       "item_name": "exact item name",
       "category_id": "exact ID from the list above",
       "category_name": "category name",
