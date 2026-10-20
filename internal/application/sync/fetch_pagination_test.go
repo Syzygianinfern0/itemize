@@ -32,8 +32,8 @@ type pagedQuery struct {
 }
 
 func (q *pagedQuery) Between(_, _ time.Time) monarch.TransactionQueryBuilder { return q }
-func (q *pagedQuery) Limit(n int) monarch.TransactionQueryBuilder           { q.limit = n; return q }
-func (q *pagedQuery) Offset(n int) monarch.TransactionQueryBuilder          { q.offset = n; return q }
+func (q *pagedQuery) Limit(n int) monarch.TransactionQueryBuilder            { q.limit = n; return q }
+func (q *pagedQuery) Offset(n int) monarch.TransactionQueryBuilder           { q.offset = n; return q }
 func (q *pagedQuery) Execute(context.Context) (*monarch.TransactionList, error) {
 	q.owner.offsets = append(q.owner.offsets, q.offset)
 	list := &monarch.TransactionList{}
