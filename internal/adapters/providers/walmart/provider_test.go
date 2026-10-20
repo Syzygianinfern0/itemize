@@ -190,17 +190,32 @@ func TestDedupeOrderSummariesByID(t *testing.T) {
 	assert.Equal(t, []string{"duplicate"}, duplicates)
 }
 
-// TestProvider_GetOrderDetails tests fetching order details
-func TestProvider_GetOrderDetails(t *testing.T) {
-	provider := NewProvider(nil, nil)
+// TestProvider_GetOrderDetails_LooksUpOrderInHistory tests that a single
+// order is found through purchase history (for its group and fulfillment type).
+func TestProvider_GetOrderDetails_LooksUpOrderInHistory(t *testing.T) {
+	online := summaries("p2", 4)
+	online[3].FulfillmentType = "DFS"
+	online[3].GroupID = "g-7"
+	client := &pagedWalmartClient{
+		pages: map[string][]walmartclient.OrderSummary{"": summaries("p1", 10), "c2": online, "c3": summaries("p3", 2)},
+		next:  map[string]string{"": "c2", "c2": "c3"},
+	}
 
-	ctx := context.Background()
-	order, err := provider.GetOrderDetails(ctx, "test-order-123")
+	order, err := newProvider(client, nil).GetOrderDetails(context.Background(), "p2-3")
+	require.NoError(t, err)
+	assert.Equal(t, "p2-3", order.GetID())
+	assert.Equal(t, []string{"", "c2"}, client.cursors, "stops paging once the order is found")
+	require.Len(t, client.detailCalls, 1)
+	assert.Equal(t, detailCall{orderID: "p2-3", groupID: "g-7", isInStore: false}, client.detailCalls[0])
+}
 
-	// This should return an error because we can't determine fulfillment type from ID alone
+func TestProvider_GetOrderDetails_NotFound(t *testing.T) {
+	client := &pagedWalmartClient{pages: map[string][]walmartclient.OrderSummary{"": summaries("p1", 2)}}
+	order, err := newProvider(client, nil).GetOrderDetails(context.Background(), "missing")
 	assert.Error(t, err)
 	assert.Nil(t, order)
-	assert.Contains(t, err.Error(), "not supported")
+	assert.Contains(t, err.Error(), "not found")
+	assert.Empty(t, client.detailCalls)
 }
 
 // TestProvider_HealthCheck tests health check functionality

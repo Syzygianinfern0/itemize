@@ -168,13 +168,48 @@ func dedupeOrderSummariesByID(orderSummaries []walmartclient.OrderSummary) ([]wa
 	return deduped, duplicates
 }
 
-// GetOrderDetails fetches full details for a specific order
+// orderLookupYears is how far back GetOrderDetails searches purchase history.
+const orderLookupYears = 3
+
+// GetOrderDetails fetches full details for a specific order. Walmart's detail
+// endpoint needs the order's group ID and fulfillment type, which only the
+// purchase history provides, so the order is looked up there first.
 func (p *Provider) GetOrderDetails(ctx context.Context, orderID string) (providers.Order, error) {
-	// Note: We need to know if it's in-store or not, which we can't determine from just the ID
-	// This is a limitation we'll need to handle
-	p.logger.Warn("GetOrderDetails called without fulfillment type context",
-		slog.String("order_id", orderID))
-	return nil, fmt.Errorf("GetOrderDetails not supported for Walmart without fulfillment type")
+	now := time.Now()
+	minTimestamp := now.AddDate(-orderLookupYears, 0, 0).Unix()
+	maxTimestamp := now.Unix()
+	req := walmartclient.PurchaseHistoryRequest{
+		MinTimestamp: &minTimestamp,
+		MaxTimestamp: &maxTimestamp,
+	}
+
+	for page := 0; page < maxHistoryPages; page++ {
+		resp, err := p.client.GetPurchaseHistory(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to search walmart purchase history (page %d): %w", page+1, err)
+		}
+		for _, summary := range resp.Data.OrderHistoryV2.OrderGroups {
+			if summary.OrderID != orderID {
+				continue
+			}
+			isInStore := summary.FulfillmentType == "IN_STORE"
+			fullOrder, err := p.client.GetOrderWithGroup(ctx, summary.OrderID, summary.GroupID, isInStore)
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch walmart order %s: %w", orderID, err)
+			}
+			return &Order{
+				walmartOrder: fullOrder,
+				client:       p.client,
+				logger:       p.logger,
+				ctx:          ctx,
+			}, nil
+		}
+		req.Cursor = resp.Data.OrderHistoryV2.PageInfo.NextPageCursor
+		if req.Cursor == "" {
+			break
+		}
+	}
+	return nil, fmt.Errorf("walmart order %s not found in the last %d years of purchase history", orderID, orderLookupYears)
 }
 
 // SupportsDeliveryTips returns true if provider supports delivery tips

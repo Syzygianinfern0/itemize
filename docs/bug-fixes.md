@@ -12,6 +12,25 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: `-order-id` did not work for Walmart
+
+**Description:**
+`itemize walmart -order-id <id>` always failed with `GetOrderDetails not supported for Walmart without fulfillment type`, so a single order could not be tested in isolation.
+
+**Test Case:**
+- `TestProvider_GetOrderDetails_LooksUpOrderInHistory`, `TestProvider_GetOrderDetails_NotFound` (Walmart provider)
+
+**Root Cause:**
+Walmart's order detail request needs the order's group ID and whether it was in-store; the provider only had the order ID and gave up.
+
+**Fix Applied:**
+`GetOrderDetails` pages through the last three years of purchase history until it finds the order, then fetches its details with the summary's group ID and fulfillment type (the same request a full sync makes). It stops paging as soon as the order is found and reports "not found" otherwise.
+
+**Verification:**
+- New tests pass; `go test ./...` passes.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-20: A second sync failed reading back stored order dates
 
 **Description:**
