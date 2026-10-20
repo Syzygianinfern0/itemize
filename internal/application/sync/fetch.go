@@ -86,7 +86,7 @@ func (o *Orchestrator) fetchMonarchTransactions(ctx context.Context, opts Option
 		"limit":      500,
 	}
 	started := time.Now()
-	// LOCAL EVAL PATCH: page through all transactions; upstream stops at the first 500.
+	// Page through all transactions; a single query returns at most 500.
 	txList := &monarch.TransactionList{}
 	for offset := 0; ; offset += 500 {
 		page, err := o.clients.Monarch.Transactions.Query().

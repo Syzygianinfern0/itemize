@@ -21,6 +21,9 @@ type walmartAPI interface {
 	GetOrderWithGroup(context.Context, string, string, bool) (*walmartclient.Order, error)
 }
 
+// maxHistoryPages bounds purchase-history pagination (about 2,000 orders).
+const maxHistoryPages = 200
+
 // Provider implements the OrderProvider interface for Walmart
 type Provider struct {
 	client    walmartAPI
@@ -76,10 +79,10 @@ func (p *Provider) FetchOrders(ctx context.Context, opts providers.FetchOptions)
 		MaxTimestamp: &maxTimestamp,
 	}
 
-	// Fetch purchase history from Walmart API, following the page cursor
-	// (LOCAL EVAL PATCH: upstream reads only the first page of 10 orders).
+	// Fetch purchase history from Walmart API, following the page cursor;
+	// each page holds about 10 orders.
 	var allGroups []walmartclient.OrderSummary
-	for page := 0; page < 200; page++ {
+	for page := 0; page < maxHistoryPages; page++ {
 		resp, err := p.client.GetPurchaseHistory(ctx, req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch walmart orders (page %d): %w", page+1, err)
