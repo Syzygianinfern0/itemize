@@ -88,7 +88,7 @@ func (o *Orchestrator) processAmazonReturns(
 			wrapped := fmt.Errorf("amazon refund %s (order %s, $%.2f): %w", record.RMAID, record.OrderID, record.RefundAmount, err)
 			result.Errors = append(result.Errors, wrapped)
 			o.logger.Error("Amazon refund processing failed", "order_id", record.OrderID, "rma_id", record.RMAID, "error", err)
-			o.recordError(refund, err.Error(), nil)
+			o.recordError(refund, err.Error(), nil, opts.DryRun)
 			continue
 		}
 		if processed.Skipped {

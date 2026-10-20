@@ -12,6 +12,25 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: Dry-run failures and skips were recorded as real-run results
+
+**Description:**
+During `-dry-run`, orders that failed, were skipped (no match) or were pending were saved to `processing_records` with `dry_run=0`, so the history and API could not tell them from real-run outcomes.
+
+**Test Case:**
+- `TestHandleResult_DryRunFailuresAreRecordedAsDryRun`, `TestHandleResult_DryRunSkipsAndPendingAreRecordedAsDryRun`, `TestHandleResult_RealRunFailuresAreNotDryRun`
+
+**Root Cause:**
+`recordError` and `recordPending` never set `DryRun`; only `recordSuccessWithResult` received the flag.
+
+**Fix Applied:**
+Both now take the run's dry-run flag, threaded from `handleResult` and the Amazon refund path.
+
+**Verification:**
+- The new tests fail on the old code and pass now; `go test ./...` passes.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-20: Multi-charge Walmart orders would rewrite amounts and delete bank transactions
 
 **Description:**

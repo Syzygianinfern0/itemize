@@ -49,8 +49,9 @@ func convertSplits(splits []*monarch.TransactionSplit) []storage.SplitDetail {
 // Recording and audit trail functions for the sync orchestrator.
 // These handle persisting processing results and API call logs to storage.
 
-// recordError records a processing error to storage
-func (o *Orchestrator) recordError(order providers.Order, errorMsg string, result *handlers.ProcessResult) {
+// recordError records a processing error to storage. dryRun marks errors from
+// dry-run (and propose) runs so they are not mistaken for real-run failures.
+func (o *Orchestrator) recordError(order providers.Order, errorMsg string, result *handlers.ProcessResult, dryRun bool) {
 	if o.storage != nil {
 		record := &storage.ProcessingRecord{
 			RunID:         o.runID,
@@ -65,6 +66,7 @@ func (o *Orchestrator) recordError(order providers.Order, errorMsg string, resul
 			ProcessedAt:   time.Now(),
 			Status:        "failed",
 			ErrorMessage:  errorMsg,
+			DryRun:        dryRun,
 			Items:         convertOrderItems(order.GetItems()),
 		}
 		if result != nil {
@@ -82,7 +84,7 @@ func (o *Orchestrator) recordError(order providers.Order, errorMsg string, resul
 
 // recordPending records an order that is pending (not yet charged/shipped)
 // This allows tracking without blocking retries on future syncs
-func (o *Orchestrator) recordPending(order providers.Order, reason string) {
+func (o *Orchestrator) recordPending(order providers.Order, reason string, dryRun bool) {
 	if o.storage != nil {
 		record := &storage.ProcessingRecord{
 			RunID:         o.runID,
@@ -97,6 +99,7 @@ func (o *Orchestrator) recordPending(order providers.Order, reason string) {
 			ProcessedAt:   time.Now(),
 			Status:        "pending",
 			ErrorMessage:  reason,
+			DryRun:        dryRun,
 			Items:         convertOrderItems(order.GetItems()),
 		}
 		o.populateRecordAudit(order, record)

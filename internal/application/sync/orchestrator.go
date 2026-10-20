@@ -16,14 +16,14 @@ import (
 func (o *Orchestrator) handleResult(order providers.Order, result *handlers.ProcessResult, err error, opts Options) (bool, bool, error) {
 	if err != nil {
 		o.logger.Error("Handler error", "order_id", order.GetID(), "error", err)
-		o.recordError(order, err.Error(), nil)
+		o.recordError(order, err.Error(), nil, opts.DryRun)
 		return false, false, err
 	}
 	if result.Skipped {
 		// Don't treat "payment pending" as an error - it's expected for new orders
 		if result.SkipReason == "payment pending" {
 			o.logger.Info("Order pending (awaiting shipment/charge)", "order_id", order.GetID())
-			o.recordPending(order, result.SkipReason)
+			o.recordPending(order, result.SkipReason, opts.DryRun)
 			return false, true, nil
 		}
 		// Don't treat "already has splits" as an error - just skip silently
@@ -32,7 +32,7 @@ func (o *Orchestrator) handleResult(order providers.Order, result *handlers.Proc
 			return false, true, nil
 		}
 		o.logger.Warn("Order skipped", "order_id", order.GetID(), "reason", result.SkipReason)
-		o.recordError(order, result.SkipReason, result)
+		o.recordError(order, result.SkipReason, result, opts.DryRun)
 		return false, false, fmt.Errorf("skipped: %s", result.SkipReason)
 	}
 	if result.Processed {
