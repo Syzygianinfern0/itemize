@@ -692,6 +692,12 @@ func (s *Storage) StartSyncRun(provider string, lookbackDays int, dryRun bool) (
 	return result.LastInsertId()
 }
 
+// SetSyncRunMode records how a run was invoked.
+func (s *Storage) SetSyncRunMode(runID int64, mode string) error {
+	_, err := s.db.Exec(`UPDATE sync_runs SET mode = ? WHERE id = ?`, mode, runID)
+	return err
+}
+
 // CompleteSyncRun records the completion of a sync run
 func (s *Storage) CompleteSyncRun(runID int64, ordersFound, processed, skipped, errors int) error {
 	query := `
@@ -1154,7 +1160,8 @@ func (s *Storage) ListSyncRuns(limit int) ([]SyncRun, error) {
 
 	query := `
 		SELECT id, provider, started_at, completed_at, lookback_days, dry_run,
-		       orders_found, orders_processed, orders_skipped, orders_errored, status
+		       orders_found, orders_processed, orders_skipped, orders_errored, status,
+		       COALESCE(mode, CASE WHEN dry_run THEN 'dry-run' ELSE 'live' END)
 		FROM sync_runs
 		ORDER BY started_at DESC
 		LIMIT ?
@@ -1182,6 +1189,7 @@ func (s *Storage) ListSyncRuns(limit int) ([]SyncRun, error) {
 			&r.OrdersSkipped,
 			&r.OrdersErrored,
 			&r.Status,
+			&r.Mode,
 		)
 		if err != nil {
 			return nil, err
@@ -1199,7 +1207,8 @@ func (s *Storage) ListSyncRuns(limit int) ([]SyncRun, error) {
 func (s *Storage) GetSyncRun(runID int64) (*SyncRun, error) {
 	query := `
 		SELECT id, provider, started_at, completed_at, lookback_days, dry_run,
-		       orders_found, orders_processed, orders_skipped, orders_errored, status
+		       orders_found, orders_processed, orders_skipped, orders_errored, status,
+		       COALESCE(mode, CASE WHEN dry_run THEN 'dry-run' ELSE 'live' END)
 		FROM sync_runs
 		WHERE id = ?
 	`
@@ -1218,6 +1227,7 @@ func (s *Storage) GetSyncRun(runID int64) (*SyncRun, error) {
 		&r.OrdersSkipped,
 		&r.OrdersErrored,
 		&r.Status,
+		&r.Mode,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {

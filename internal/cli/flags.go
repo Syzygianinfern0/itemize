@@ -12,6 +12,7 @@ import (
 // SyncFlags are common flags for all sync commands
 type SyncFlags struct {
 	DryRun               bool
+	Propose              bool
 	LookbackDays         int
 	MaxOrders            int
 	Force                bool
@@ -31,6 +32,7 @@ type SyncFlags struct {
 func ParseSyncFlags(providerName string) SyncFlags {
 	var flags SyncFlags
 	flag.BoolVar(&flags.DryRun, "dry-run", false, "Run without making changes")
+	flag.BoolVar(&flags.Propose, "propose", false, "Store every change as a proposal for review instead of writing to Monarch (see 'itemize proposals' and 'itemize apply')")
 	flag.IntVar(&flags.LookbackDays, "days", 14, "Number of days to look back")
 	flag.IntVar(&flags.MaxOrders, "max", 0, "Maximum orders to process (0 = all)")
 	flag.BoolVar(&flags.Force, "force", false, "Force reprocess already processed orders")
@@ -117,6 +119,7 @@ Examples:
 func (f SyncFlags) ToSyncOptions() sync.Options {
 	return sync.Options{
 		DryRun:       f.DryRun,
+		Propose:      f.Propose,
 		LookbackDays: f.LookbackDays,
 		MaxOrders:    f.MaxOrders,
 		Force:        f.Force,

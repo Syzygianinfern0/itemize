@@ -153,6 +153,9 @@ func (o *Orchestrator) recordSuccessWithResult(
 		if dryRun {
 			record.Status = "dry-run"
 		}
+		if o.proposing {
+			record.Status = "proposed"
+		}
 
 		// Add multi-delivery metadata if provided
 		if multiDeliveryInfo != nil {

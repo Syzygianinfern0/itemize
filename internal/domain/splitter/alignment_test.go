@@ -2,6 +2,7 @@ package splitter
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,4 +140,40 @@ func TestAllocateSplits_ProportionalToChargeAmount(t *testing.T) {
 	}
 	assert.InDelta(t, -5.01, sum, 1e-9)
 	assert.InDelta(t, -2.50, splits[2].Amount, 0.011)
+}
+
+func TestPlanTransaction(t *testing.T) {
+	items := []CategorizedItem{
+		{Name: "Water", Price: 10, Quantity: 1, CategoryID: "groceries", CategoryName: "Groceries"},
+		{Name: "Bag", Price: 30, Quantity: 1, CategoryID: "travel", CategoryName: "Travel"},
+	}
+	plan, err := PlanTransaction(items, -8, "Charge 1 of 2 ($8.00 of $40.00 for this order)\n")
+	require.NoError(t, err)
+	assert.Equal(t, PlanSplits, plan.Kind)
+	require.Len(t, plan.Splits, 2)
+	assert.InDelta(t, -2.0, plan.Splits[0].Amount, 1e-9)
+	assert.True(t, strings.HasPrefix(plan.Splits[1].Notes, "Charge 1 of 2"))
+
+	items[1].CategoryID, items[1].CategoryName = "groceries", "Groceries"
+	plan, err = PlanTransaction(items, -8, "")
+	require.NoError(t, err)
+	assert.Equal(t, PlanCategory, plan.Kind)
+	assert.Equal(t, "groceries", plan.CategoryID)
+	assert.Contains(t, plan.Notes, "- Bag $30.00")
+
+	items[0].CategoryID = ""
+	_, err = PlanTransaction(items, -8, "")
+	assert.Error(t, err)
+}
+
+func TestLastCategorized_OnlyForSameOrder(t *testing.T) {
+	cat := &recordingCategorizer{result: &categorizer.CategorizationResult{Categorizations: []categorizer.ItemCategorization{
+		{ItemIndex: 0, CategoryID: "a"}, {ItemIndex: 1, CategoryID: "b"}, {ItemIndex: 2, CategoryID: "c"},
+	}}}
+	s := NewSplitter(cat)
+	_, err := s.CategorizeOrder(context.Background(), threeItemOrder(), nil)
+	require.NoError(t, err)
+	assert.Len(t, s.LastCategorized("SYN-1"), 3)
+	assert.Nil(t, s.LastCategorized("SYN"))
+	assert.Nil(t, s.LastCategorized("OTHER"))
 }

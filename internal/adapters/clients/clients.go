@@ -46,6 +46,17 @@ func NewClients(cfg *config.Config) (*Clients, error) {
 	}, nil
 }
 
+// NewMonarchClient returns a Monarch client with the write policy installed,
+// for commands that need Monarch but no LLM (e.g. apply).
+func NewMonarchClient(cfg *config.Config) (*monarch.Client, error) {
+	client, err := newMonarchClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	ApplyWritePolicy(client, cfg.DestructiveWritesAllowed())
+	return client, nil
+}
+
 // newMonarchClient authenticates with a browser-copied session cookie. Monarch
 // no longer accepts the legacy bearer token (MONARCH_TOKEN), so a cookie is
 // required. See README for how to copy MONARCH_COOKIE.

@@ -18,6 +18,11 @@ go build -o itemize ./cmd/itemize/
 ./itemize walmart -dry-run -days 14 -verbose
 ./itemize costco  -dry-run -days 7
 
+# Propose changes for review, then apply only what you approve
+./itemize walmart -propose -days 14
+./itemize proposals                 # -approve 3,4 -reject 5
+./itemize apply                     # shows the exact writes, asks to confirm
+
 # Apply
 ./itemize walmart -days 14
 ./itemize costco  -days 7 -max 10

@@ -8,7 +8,57 @@ type Repository interface {
 	SyncRunRepository
 	APICallRepository
 	LedgerRepository
+	ProposalRepository
 	Close() error
+}
+
+// ProposalRepository stores proposed Monarch changes for review.
+type ProposalRepository interface {
+	// ReplaceOrderProposals swaps an order's unreviewed proposals (pending,
+	// stale, failed) for the given ones, in one transaction. Reviewed ones
+	// (approved, rejected, applied) are kept.
+	ReplaceOrderProposals(orderID string, proposals []*Proposal) error
+
+	// ListProposals returns proposals matching the filters, newest first.
+	ListProposals(filters ProposalFilters) (*ProposalListResult, error)
+
+	// GetProposal returns one proposal, or nil if it does not exist.
+	GetProposal(id int64) (*Proposal, error)
+
+	// GetOrderProposals returns all proposals for an order, oldest first.
+	GetOrderProposals(orderID string) ([]*Proposal, error)
+
+	// SetProposalStatus moves proposals to status (approve/reject/reset), only
+	// from the given current statuses. It returns how many rows changed.
+	SetProposalStatus(ids []int64, status string, from []string) (int, error)
+
+	// UpdateProposalContent replaces a pending proposal's planned change after
+	// an edit (kind, category, notes, splits, items).
+	UpdateProposalContent(p *Proposal) error
+
+	// RecordProposalResult marks a proposal applied, failed or stale.
+	RecordProposalResult(id int64, status, errMsg string) error
+
+	// HasReviewedProposals reports whether an order has approved, rejected or
+	// applied proposals (so a new propose run leaves it alone).
+	HasReviewedProposals(orderID string) (bool, error)
+}
+
+// ProposalFilters selects proposals.
+type ProposalFilters struct {
+	Status   string // empty = all
+	OrderID  string
+	Provider string
+	Limit    int // 0 = default 200
+	Offset   int
+}
+
+// ProposalListResult is a page of proposals.
+type ProposalListResult struct {
+	Proposals  []*Proposal `json:"proposals"`
+	TotalCount int         `json:"total_count"`
+	Limit      int         `json:"limit"`
+	Offset     int         `json:"offset"`
 }
 
 // OrderRepository handles processing record operations
@@ -79,6 +129,9 @@ type SyncRunRepository interface {
 	// CompleteSyncRun records the completion of a sync run
 	CompleteSyncRun(runID int64, ordersFound, processed, skipped, errors int) error
 
+	// SetSyncRunMode records how a run was invoked: live, dry-run, propose or apply.
+	SetSyncRunMode(runID int64, mode string) error
+
 	// ListSyncRuns returns recent sync runs
 	ListSyncRuns(limit int) ([]SyncRun, error)
 
@@ -99,6 +152,7 @@ type SyncRun struct {
 	OrdersSkipped   int    `json:"orders_skipped"`
 	OrdersErrored   int    `json:"orders_errored"`
 	Status          string `json:"status"`
+	Mode            string `json:"mode"`
 }
 
 // APICallRepository handles API call logging

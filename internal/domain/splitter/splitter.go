@@ -330,3 +330,69 @@ func (s *Splitter) GetSingleCategoryInfo(
 	}
 	return SingleCategoryInfo(items)
 }
+
+// LastCategorized returns the categorized items from the most recent
+// CategorizeOrder call if it was for orderID, else nil.
+func (s *Splitter) LastCategorized(orderID string) []CategorizedItem {
+	if s.lastItems == nil || !strings.HasPrefix(s.lastKey, orderID+"\x00") && s.lastKey != orderID {
+		return nil
+	}
+	return append([]CategorizedItem(nil), s.lastItems...)
+}
+
+// Plan kinds.
+const (
+	PlanCategory = "category"
+	PlanSplits   = "splits"
+)
+
+// Plan is the change a transaction gets for a set of categorized items.
+type Plan struct {
+	Kind         string
+	CategoryID   string
+	CategoryName string
+	Notes        string
+	Splits       []*monarch.TransactionSplit
+}
+
+// PlanTransaction decides how a transaction of amount is categorized from
+// items: one category with notes, or proportional splits. notePrefix is
+// prepended to every note (e.g. "Charge 1 of 3 ...\n"). It mirrors what the
+// sync handlers write, so an edited proposal is recomputed the same way.
+func PlanTransaction(items []CategorizedItem, amount float64, notePrefix string) (*Plan, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no items")
+	}
+	for _, item := range items {
+		if item.CategoryID == "" {
+			return nil, fmt.Errorf("item %q has no category", item.Name)
+		}
+	}
+
+	if CountCategories(items) > 1 {
+		splits, err := AllocateSplits(items, amount)
+		if err != nil {
+			return nil, err
+		}
+		if len(splits) > 1 {
+			for _, split := range splits {
+				split.Notes = notePrefix + split.Notes
+			}
+			return &Plan{Kind: PlanSplits, Splits: splits}, nil
+		}
+		if len(splits) == 1 {
+			// Too small to share: the one category that got the amount.
+			name := splits[0].Notes
+			if idx := strings.Index(name, ":"); idx > 0 {
+				name = name[:idx]
+			}
+			return &Plan{Kind: PlanCategory, CategoryID: splits[0].CategoryID, CategoryName: name, Notes: notePrefix + splits[0].Notes}, nil
+		}
+	}
+
+	categoryID, notes, err := SingleCategoryInfo(items)
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{Kind: PlanCategory, CategoryID: categoryID, CategoryName: items[0].CategoryName, Notes: notePrefix + notes}, nil
+}

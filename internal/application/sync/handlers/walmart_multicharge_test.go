@@ -284,3 +284,22 @@ func TestAmazonMultiCharge_SplitsEachChargeWithoutConsolidating(t *testing.T) {
 		assert.Nil(t, mon.updates[txn.ID].Amount)
 	}
 }
+
+func TestWalmartDryRun_ReportsSingleCategoryDecision(t *testing.T) {
+	date := time.Date(2025, 7, 1, 12, 0, 0, 0, time.UTC)
+	order := &walmartTestOrder{
+		id: "SYN-DRY-SINGLE", date: date, total: 6.12, subtotal: 6.12,
+		items:   []providers.OrderItem{&walmartTestItem{name: "Bandages", price: 6.12, quantity: 1}},
+		charges: []float64{6.12},
+	}
+	mon := newRecordingMonarch()
+	h := newMultiChargeHandler(t, byNameCategorizer{"Bandages": "medical"}, mon)
+
+	result, err := h.ProcessOrder(context.Background(), order,
+		[]*monarch.Transaction{{ID: "s1", Amount: -6.12, Date: walmartToMonarchDate(date)}},
+		map[string]bool{}, nil, nil, true)
+	require.NoError(t, err)
+	assert.Empty(t, mon.updates)
+	assert.Equal(t, "medical", result.CategoryID, "dry runs must report (and persist) the category decision")
+	assert.Contains(t, result.MonarchNotes, "- Bandages $6.12")
+}

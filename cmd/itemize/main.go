@@ -46,6 +46,19 @@ func main() {
 		return
 	}
 
+	// Review workflow: list/approve/reject proposals, and apply approved ones.
+	if command == "proposals" || command == "apply" {
+		cfg := config.LoadOrEnv()
+		run := cli.RunProposals
+		if command == "apply" {
+			run = cli.RunApply
+		}
+		if err := run(cfg, os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			log.Fatalf("%s: %v", command, err)
+		}
+		return
+	}
+
 	flush := telemetry.Init()
 	defer flush()
 
@@ -202,7 +215,7 @@ func main() {
 	}
 
 	// Print header
-	cli.PrintHeader(provider.DisplayName(), flags.DryRun)
+	cli.PrintHeader(provider.DisplayName(), flags.DryRun, flags.Propose)
 
 	// Print database info
 	fmt.Printf("Database: %s\n", cfg.Storage.DatabasePath)
@@ -250,6 +263,8 @@ func printUsage() {
 	fmt.Println("              Read Amazon's return/refund ledger as JSON")
 	fmt.Println("  costco      Sync Costco orders")
 	fmt.Println("  walmart     Sync Walmart orders")
+	fmt.Println("  proposals   List proposed changes; -approve/-reject IDs")
+	fmt.Println("  apply       Write approved proposals to Monarch (asks for confirmation)")
 	fmt.Println("  version     Print version, commit, and build date (also: -version, --version)")
 	fmt.Println()
 	fmt.Println("Serve Flags:")
@@ -258,6 +273,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Sync Flags:")
 	fmt.Println("  -dry-run         Run without making changes")
+	fmt.Println("  -propose         Store changes as proposals for review; nothing is written")
 	fmt.Println("  -days int        Number of days to look back (default 14)")
 	fmt.Println("  -max int         Maximum orders to process (default 0 = all)")
 	fmt.Println("  -force           Force reprocess already processed orders")

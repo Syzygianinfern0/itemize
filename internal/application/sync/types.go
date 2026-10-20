@@ -31,12 +31,15 @@ type ProgressCallback func(update ProgressUpdate)
 
 // Options holds sync configuration
 type Options struct {
-	DryRun           bool
-	LookbackDays     int
-	MaxOrders        int
-	Force            bool
-	Verbose          bool
-	OrderID          string           // If set, only process this specific order (for testing)
+	DryRun       bool
+	LookbackDays int
+	MaxOrders    int
+	Force        bool
+	Verbose      bool
+	OrderID      string // If set, only process this specific order (for testing)
+	// Propose stores every change as a proposal for review instead of writing
+	// to Monarch. Approved proposals are written later by Applier.
+	Propose          bool
 	ProgressCallback ProgressCallback // Optional callback for progress updates
 }
 
@@ -67,6 +70,12 @@ type Orchestrator struct {
 	storage              storage.Repository // Interface instead of concrete type
 	logger               *slog.Logger
 	runID                int64 // Current sync run ID for API logging
+
+	// proposing is set for the duration of a propose run.
+	proposing      bool
+	currentOrderID string
+	// categoryNames maps Monarch category IDs to names for the current run.
+	categoryNames map[string]string
 }
 
 // NewOrchestrator creates a new sync orchestrator
@@ -209,6 +218,11 @@ type monarchAdapter struct {
 	verifyWrites bool
 	snapshots    map[string]TransactionSnapshot
 	written      map[string]bool
+
+	// proposing captures writes as proposals instead of sending them.
+	proposing    bool
+	captured     []*capturedWrite
+	currentItems func() []splitter.CategorizedItem
 }
 
 // rememberSeen records the state of transactions as fetched, for the
@@ -268,6 +282,9 @@ func (a *monarchAdapter) markWritten(id string) {
 }
 
 func (a *monarchAdapter) UpdateTransaction(ctx context.Context, id string, params *monarch.UpdateTransactionParams) error {
+	if a.proposing {
+		return a.captureUpdate(id, params)
+	}
 	if err := a.verifyBeforeWrite(ctx, id); err != nil {
 		return err
 	}
@@ -310,6 +327,9 @@ func (a *monarchAdapter) GetSplits(ctx context.Context, id string) ([]*monarch.T
 }
 
 func (a *monarchAdapter) UpdateSplits(ctx context.Context, id string, splits []*monarch.TransactionSplit) error {
+	if a.proposing {
+		return a.captureSplits(id, splits)
+	}
 	if err := a.verifyBeforeWrite(ctx, id); err != nil {
 		return err
 	}

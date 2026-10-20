@@ -9,10 +9,13 @@ import (
 )
 
 // PrintHeader prints the application header
-func PrintHeader(providerName string, dryRun bool) {
+func PrintHeader(providerName string, dryRun, propose bool) {
 	mode := "PRODUCTION"
 	if dryRun {
 		mode = "DRY-RUN"
+	}
+	if propose {
+		mode = "PROPOSE: changes are stored for review, nothing is written to Monarch"
 	}
 	fmt.Printf("itemize: %s (%s mode)\n", providerName, mode)
 }

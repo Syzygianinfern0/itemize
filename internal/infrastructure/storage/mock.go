@@ -1,5 +1,7 @@
 package storage
 
+import "sync"
+
 // MockRepository is an in-memory implementation of Repository for testing.
 // It stores all data in maps and slices, making tests fast and isolated.
 type MockRepository struct {
@@ -14,6 +16,8 @@ type MockRepository struct {
 	nextRunID       int64
 	nextLedgerID    int64
 	nextChargeID    int64
+	proposalsOnce   sync.Once
+	proposalRows    *mockProposals
 
 	// Hooks for test assertions
 	SaveRecordCalled   bool
@@ -44,6 +48,7 @@ type mockSyncRun struct {
 	skipped      int
 	errors       int
 	completed    bool
+	mode         string
 }
 
 // NewMockRepository creates a new mock repository for testing
@@ -199,6 +204,14 @@ func (m *MockRepository) StartSyncRun(provider string, lookbackDays int, dryRun 
 	}
 
 	return id, nil
+}
+
+// SetSyncRunMode records how a run was invoked.
+func (m *MockRepository) SetSyncRunMode(runID int64, mode string) error {
+	if run, ok := m.syncRuns[runID]; ok {
+		run.mode = mode
+	}
+	return nil
 }
 
 // CompleteSyncRun marks a sync run as complete
@@ -400,6 +413,7 @@ func (m *MockRepository) ListSyncRuns(limit int) ([]SyncRun, error) {
 			OrdersSkipped:   r.skipped,
 			OrdersErrored:   r.errors,
 			Status:          status,
+			Mode:            r.mode,
 		})
 		if len(runs) >= limit {
 			break
@@ -428,6 +442,7 @@ func (m *MockRepository) GetSyncRun(runID int64) (*SyncRun, error) {
 		OrdersSkipped:   r.skipped,
 		OrdersErrored:   r.errors,
 		Status:          status,
+		Mode:            r.mode,
 	}, nil
 }
 

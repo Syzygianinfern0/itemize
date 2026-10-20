@@ -28,3 +28,21 @@ A transaction itemize already wrote during the same run is not re-checked, since
 ## Development guard
 
 In the local evaluation workspace, `go.work` replaces `monarch-go` with a copy that refuses every GraphQL mutation unless `MONARCH_ALLOW_MUTATIONS=1`. That guard is independent of the ones above.
+
+## Propose → review → apply
+
+A propose run (`itemize walmart -propose -days 30`) processes orders exactly like a live sync, but the Monarch adapter captures each write instead of sending it. After each order, the captured writes become rows in the `proposals` table, one per target transaction:
+
+- `kind`: `category` (category + notes) or `splits`
+- `before_json`: the transaction snapshot the change was computed against
+- the proposed category/notes or splits, the categorized items (for editing), a reason and an average categorization confidence
+
+The order's `processing_records` row gets status `proposed` (with `dry_run=1`), so it is not treated as processed. Re-proposing replaces an order's unreviewed proposals (`pending`, `stale`, `failed`); orders with `approved`, `rejected` or `applied` proposals are skipped unless `-force`. Multi-charge consolidation never runs in propose mode. Amazon refunds are previewed but not proposed yet.
+
+Review with `itemize proposals` (`-approve`, `-reject`, `-reset` take comma-separated IDs) or the web UI (`itemize serve`). `itemize apply` lists exactly what will be written and asks you to type `apply`. For each approved proposal it:
+
+1. re-reads the transaction and runs the pre-write check against `before_json`; on a mismatch the proposal becomes `stale` and nothing is written;
+2. writes the splits or the category/notes (never the amount), logging intent and completion in `api_calls`;
+3. marks the proposal `applied` (or `failed` with the error).
+
+When every proposal of an order is `applied` or `rejected` (with at least one applied), the order's record becomes `success`, so later syncs skip it.
