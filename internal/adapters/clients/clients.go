@@ -21,6 +21,9 @@ const (
 type Clients struct {
 	Monarch     *monarch.Client
 	Categorizer *categorizer.Categorizer
+	// AllowDestructiveWrites mirrors config.DestructiveWritesAllowed: when
+	// false (the default) transaction deletes and amount changes are refused.
+	AllowDestructiveWrites bool
 }
 
 func NewClients(cfg *config.Config) (*Clients, error) {
@@ -36,8 +39,9 @@ func NewClients(cfg *config.Config) (*Clients, error) {
 	cat := categorizer.NewCategorizer(chatClient, categorizer.NewMemoryCache(), model)
 
 	return &Clients{
-		Monarch:     mClient,
-		Categorizer: cat,
+		Monarch:                mClient,
+		Categorizer:            cat,
+		AllowDestructiveWrites: cfg.DestructiveWritesAllowed(),
 	}, nil
 }
 

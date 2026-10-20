@@ -212,7 +212,25 @@ func (o *Orchestrator) recordOrderTransactions(order providers.Order, record *st
 		}
 		return
 	}
-	if result.Transaction != nil {
+	if len(result.Charges) > 0 {
+		for _, charge := range result.Charges {
+			if charge.Transaction == nil {
+				continue
+			}
+			if err := o.storage.SaveOrderTransaction(&storage.OrderTransaction{
+				RunID:         o.runID,
+				OrderID:       order.GetID(),
+				TransactionID: charge.Transaction.ID,
+				Role:          "charge",
+				Amount:        charge.Transaction.Amount,
+				CategoryID:    charge.CategoryID,
+				CategoryName:  charge.CategoryName,
+				Notes:         charge.MonarchNotes,
+			}); err != nil {
+				o.logger.Error("Failed to save charge order transaction", "order_id", order.GetID(), "transaction_id", charge.Transaction.ID, "error", err)
+			}
+		}
+	} else if result.Transaction != nil {
 		if err := o.storage.SaveOrderTransaction(&storage.OrderTransaction{
 			RunID:         o.runID,
 			OrderID:       order.GetID(),

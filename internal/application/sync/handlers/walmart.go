@@ -50,6 +50,11 @@ type WalmartHandler struct {
 	ledgerStorage LedgerStorage
 	syncRunID     int64
 	logger        *slog.Logger
+
+	// allowConsolidation enables the legacy multi-charge path that rewrites one
+	// transaction's amount to the order total and deletes the others. It is off
+	// by default: each charge's transaction is split on its own instead.
+	allowConsolidation bool
 }
 
 // NewWalmartHandler creates a new Walmart order handler
@@ -73,6 +78,12 @@ func NewWalmartHandler(
 func (h *WalmartHandler) SetLedgerStorage(storage LedgerStorage, syncRunID int64) {
 	h.ledgerStorage = storage
 	h.syncRunID = syncRunID
+}
+
+// SetAllowConsolidation enables (true) or disables (false, the default) the
+// destructive consolidation of multi-charge orders.
+func (h *WalmartHandler) SetAllowConsolidation(allow bool) {
+	h.allowConsolidation = allow
 }
 
 // ProcessOrder processes a Walmart order
@@ -260,7 +271,7 @@ func (h *WalmartHandler) processWithOrderTotal(
 		"amount", math.Abs(matchResult.Transaction.Amount),
 		"date_diff_days", matchResult.DateDiff)
 
-	return h.categorizeAndApplySplits(ctx, order, matchResult.Transaction, catCategories, monarchCategories, dryRun)
+	return h.categorizeAndApplySplits(ctx, order, matchResult.Transaction, catCategories, monarchCategories, dryRun, "")
 }
 
 // processWithLedgerAmount handles orders where bank charge differs from order total (gift cards)
@@ -306,7 +317,7 @@ func (h *WalmartHandler) processWithLedgerAmount(
 		"date_diff_days", matchResult.DateDiff)
 
 	// Use original order (not wrapper) for categorization
-	return h.categorizeAndApplySplits(ctx, order, matchResult.Transaction, catCategories, monarchCategories, dryRun)
+	return h.categorizeAndApplySplits(ctx, order, matchResult.Transaction, catCategories, monarchCategories, dryRun, "")
 }
 
 // processMultiDeliveryOrder handles orders split into multiple bank charges
@@ -383,8 +394,14 @@ func (h *WalmartHandler) processMultiDeliveryOrder(
 		"order_id", order.GetID(),
 		"transaction_count", len(matchedTxns))
 
-	// Consolidate transactions into one
-	consolidationResult, err := h.consolidator.ConsolidateTransactions(ctx, matchedTxns, order, dryRun)
+	if !h.allowConsolidation {
+		return h.processEachCharge(ctx, order, matchedTxns, catCategories, monarchCategories, dryRun)
+	}
+
+	// Legacy: consolidate transactions into one. The ledger's charges, not the
+	// order total (which Walmart reports net of later refunds), set the amount.
+	ledgerOrder := &ledgerAmountOrder{Order: order, ledgerAmount: sumCharges(charges)}
+	consolidationResult, err := h.consolidator.ConsolidateTransactions(ctx, matchedTxns, ledgerOrder, dryRun)
 	if err != nil {
 		return nil, fmt.Errorf("consolidation error: %w", err)
 	}
@@ -397,7 +414,55 @@ func (h *WalmartHandler) processMultiDeliveryOrder(
 		"original_count", len(matchedTxns))
 
 	// Categorize and apply splits to consolidated transaction
-	return h.categorizeAndApplySplits(ctx, order, consolidatedTxn, catCategories, monarchCategories, dryRun)
+	return h.categorizeAndApplySplits(ctx, order, consolidatedTxn, catCategories, monarchCategories, dryRun, "")
+}
+
+// processEachCharge categorizes every charge's Monarch transaction on its own.
+// Amounts are never changed and nothing is deleted: each transaction is split
+// across the order's categories in proportion to their item subtotals, so the
+// charges together carry the whole order. Notes say which charge each one is.
+func (h *WalmartHandler) processEachCharge(
+	ctx context.Context,
+	order WalmartOrder,
+	transactions []*monarch.Transaction,
+	catCategories []categorizer.Category,
+	monarchCategories []*monarch.TransactionCategory,
+	dryRun bool,
+) (*ProcessResult, error) {
+	total := 0.0
+	for _, txn := range transactions {
+		total += math.Abs(txn.Amount)
+	}
+
+	h.logInfo("Splitting each charge of multi-charge order",
+		"order_id", order.GetID(),
+		"transaction_count", len(transactions),
+		"charge_total", math.Round(total*100)/100)
+
+	result := &ProcessResult{Processed: true}
+	for i, txn := range transactions {
+		prefix := fmt.Sprintf("Charge %d of %d ($%.2f of $%.2f for this order)\n", i+1, len(transactions), math.Abs(txn.Amount), total)
+		chargeResult, err := h.categorizeAndApplySplits(ctx, order, txn, catCategories, monarchCategories, dryRun, prefix)
+		if err != nil {
+			return nil, fmt.Errorf("charge %d of %d (transaction %s): %w", i+1, len(transactions), txn.ID, err)
+		}
+		result.Charges = append(result.Charges, ChargeProcessResult{
+			Amount:       txn.Amount,
+			Transaction:  txn,
+			Splits:       chargeResult.Splits,
+			CategoryID:   chargeResult.CategoryID,
+			CategoryName: chargeResult.CategoryName,
+			MonarchNotes: chargeResult.MonarchNotes,
+		})
+	}
+
+	first := result.Charges[0]
+	result.Transaction = first.Transaction
+	result.Splits = first.Splits
+	result.CategoryID = first.CategoryID
+	result.CategoryName = first.CategoryName
+	result.MonarchNotes = first.MonarchNotes
+	return result, nil
 }
 
 func (h *WalmartHandler) processMultiDeliveryAggregateFallback(
@@ -440,6 +505,19 @@ func (h *WalmartHandler) processMultiDeliveryAggregateFallback(
 			if hasPendingTransaction(recoveryTxns) {
 				return &ProcessResult{Skipped: true, SkipReason: "payment pending"}, nil
 			}
+			if !h.allowConsolidation {
+				// An earlier consolidation rewrote one amount but left other
+				// charges in place. Finishing it would delete transactions, so
+				// leave the order for the owner to resolve in Monarch.
+				h.logWarn("Interrupted multi-delivery consolidation needs manual review",
+					"order_id", order.GetID(),
+					"consolidated_id", matchedTxns[0].ID,
+					"undeleted_count", len(recoveryTxns)-1)
+				return &ProcessResult{
+					Skipped:    true,
+					SkipReason: fmt.Sprintf("interrupted consolidation: %d leftover transaction(s) need manual review (destructive writes are disabled)", len(recoveryTxns)-1),
+				}, nil
+			}
 			if h.consolidator == nil {
 				return nil, fmt.Errorf("interrupted consolidation found %d undeleted transactions but consolidator is not configured", len(recoveryTxns)-1)
 			}
@@ -454,7 +532,7 @@ func (h *WalmartHandler) processMultiDeliveryAggregateFallback(
 			if err != nil {
 				return nil, fmt.Errorf("interrupted consolidation recovery error: %w", err)
 			}
-			return h.categorizeAndApplySplits(ctx, order, consolidationResult.ConsolidatedTransaction, catCategories, monarchCategories, dryRun)
+			return h.categorizeAndApplySplits(ctx, order, consolidationResult.ConsolidatedTransaction, catCategories, monarchCategories, dryRun, "")
 		}
 
 		h.logInfo("Matched multi-delivery order by aggregate ledger total",
@@ -462,12 +540,9 @@ func (h *WalmartHandler) processMultiDeliveryAggregateFallback(
 			"ledger_charge_count", len(charges),
 			"ledger_total", ledgerTotal,
 			"transaction_id", matchedTxns[0].ID)
-		return h.categorizeAndApplySplits(ctx, order, matchedTxns[0], catCategories, monarchCategories, dryRun)
+		return h.categorizeAndApplySplits(ctx, order, matchedTxns[0], catCategories, monarchCategories, dryRun, "")
 	}
 
-	if h.consolidator == nil {
-		return nil, fmt.Errorf("aggregate match found %d transactions but consolidator is not configured", len(matchedTxns))
-	}
 	if hasPendingTransaction(matchedTxns) {
 		return &ProcessResult{Skipped: true, SkipReason: "payment pending"}, nil
 	}
@@ -478,12 +553,19 @@ func (h *WalmartHandler) processMultiDeliveryAggregateFallback(
 		"ledger_total", ledgerTotal,
 		"transaction_count", len(matchedTxns))
 
+	if !h.allowConsolidation {
+		return h.processEachCharge(ctx, order, matchedTxns, catCategories, monarchCategories, dryRun)
+	}
+	if h.consolidator == nil {
+		return nil, fmt.Errorf("aggregate match found %d transactions but consolidator is not configured", len(matchedTxns))
+	}
+
 	consolidationResult, err := h.consolidator.ConsolidateTransactions(ctx, matchedTxns, matchOrder, dryRun)
 	if err != nil {
 		return nil, fmt.Errorf("aggregate fallback consolidation error: %w", err)
 	}
 
-	return h.categorizeAndApplySplits(ctx, order, consolidationResult.ConsolidatedTransaction, catCategories, monarchCategories, dryRun)
+	return h.categorizeAndApplySplits(ctx, order, consolidationResult.ConsolidatedTransaction, catCategories, monarchCategories, dryRun, "")
 }
 
 func interruptedConsolidationTransactions(
@@ -581,7 +663,7 @@ func (h *WalmartHandler) processRefundCharges(ctx context.Context, order Walmart
 		}
 		usedTxnIDs[matchResult.Transaction.ID] = true
 		h.logInfo("Matched refund transaction", "order_id", order.GetID(), "transaction_id", matchResult.Transaction.ID, "refund_amount", amount, "date_diff_days", matchResult.DateDiff)
-		refundResult, err := h.categorizeAndApplySplits(ctx, refundOrder, matchResult.Transaction, catCategories, monarchCategories, dryRun)
+		refundResult, err := h.categorizeAndApplySplits(ctx, refundOrder, matchResult.Transaction, catCategories, monarchCategories, dryRun, "")
 		if err != nil {
 			return refunds, fmt.Errorf("refund split creation error: %w", err)
 		}
@@ -590,7 +672,9 @@ func (h *WalmartHandler) processRefundCharges(ctx context.Context, order Walmart
 	return refunds, nil
 }
 
-// categorizeAndApplySplits applies categorization and splits to a transaction
+// categorizeAndApplySplits applies categorization and splits to a transaction.
+// notePrefix, if set, is prepended to every note written. The transaction's
+// amount is never changed.
 func (h *WalmartHandler) categorizeAndApplySplits(
 	ctx context.Context,
 	order WalmartOrder,
@@ -598,6 +682,7 @@ func (h *WalmartHandler) categorizeAndApplySplits(
 	catCategories []categorizer.Category,
 	monarchCategories []*monarch.TransactionCategory,
 	dryRun bool,
+	notePrefix string,
 ) (*ProcessResult, error) {
 	result := &ProcessResult{}
 
@@ -607,6 +692,26 @@ func (h *WalmartHandler) categorizeAndApplySplits(
 		return nil, fmt.Errorf("split creation error: %w", err)
 	}
 
+	if len(splits) == 1 {
+		// Too small to share across categories (e.g. a one-cent charge): set
+		// the one category instead of writing a single split.
+		result.CategoryID = splits[0].CategoryID
+		if idx := strings.Index(splits[0].Notes, ":"); idx > 0 {
+			result.CategoryName = splits[0].Notes[:idx]
+		}
+		result.MonarchNotes = notePrefix + splits[0].Notes
+		return h.applyCategory(ctx, order, transaction, result, dryRun)
+	}
+
+	if splits != nil && notePrefix != "" {
+		prefixed := make([]*monarch.TransactionSplit, len(splits))
+		for i, split := range splits {
+			copied := *split
+			copied.Notes = notePrefix + split.Notes
+			prefixed[i] = &copied
+		}
+		splits = prefixed
+	}
 	result.Splits = splits
 
 	// Apply to Monarch
@@ -616,41 +721,63 @@ func (h *WalmartHandler) categorizeAndApplySplits(
 		if err != nil {
 			return nil, fmt.Errorf("get category info error: %w", err)
 		}
-
-		if !dryRun {
-			params := &monarch.UpdateTransactionParams{
-				CategoryID: &categoryID,
-				Notes:      &notes,
-			}
-			if err := h.monarch.UpdateTransaction(ctx, transaction.ID, params); err != nil {
-				return nil, fmt.Errorf("update transaction error: %w", err)
-			}
-			h.logDebug("Updated transaction category",
-				"order_id", order.GetID(),
-				"transaction_id", transaction.ID,
-				"category_id", categoryID)
-		} else {
-			h.logDebug("[DRY RUN] Would update transaction category",
-				"order_id", order.GetID(),
-				"category_id", categoryID)
+		if idx := strings.Index(notes, ":"); idx > 0 {
+			result.CategoryName = notes[:idx]
 		}
-	} else {
-		// Multiple categories - apply splits
-		if !dryRun {
-			if err := h.monarch.UpdateSplits(ctx, transaction.ID, splits); err != nil {
-				return nil, fmt.Errorf("update splits error: %w", err)
-			}
-			h.logDebug("Applied splits",
-				"order_id", order.GetID(),
-				"transaction_id", transaction.ID,
-				"split_count", len(splits))
-		} else {
-			h.logDebug("[DRY RUN] Would apply splits",
-				"order_id", order.GetID(),
-				"split_count", len(splits))
-		}
+		result.CategoryID = categoryID
+		result.MonarchNotes = notePrefix + notes
+		return h.applyCategory(ctx, order, transaction, result, dryRun)
 	}
 
+	// Multiple categories - apply splits
+	if !dryRun {
+		if err := h.monarch.UpdateSplits(ctx, transaction.ID, splits); err != nil {
+			return nil, fmt.Errorf("update splits error: %w", err)
+		}
+		h.logDebug("Applied splits",
+			"order_id", order.GetID(),
+			"transaction_id", transaction.ID,
+			"split_count", len(splits))
+	} else {
+		h.logDebug("[DRY RUN] Would apply splits",
+			"order_id", order.GetID(),
+			"transaction_id", transaction.ID,
+			"split_count", len(splits))
+	}
+
+	result.Transaction = transaction
+	result.Processed = true
+	return result, nil
+}
+
+// applyCategory writes result's single category and notes to transaction.
+func (h *WalmartHandler) applyCategory(
+	ctx context.Context,
+	order WalmartOrder,
+	transaction *monarch.Transaction,
+	result *ProcessResult,
+	dryRun bool,
+) (*ProcessResult, error) {
+	result.Splits = nil
+	if !dryRun {
+		categoryID, notes := result.CategoryID, result.MonarchNotes
+		params := &monarch.UpdateTransactionParams{
+			CategoryID: &categoryID,
+			Notes:      &notes,
+		}
+		if err := h.monarch.UpdateTransaction(ctx, transaction.ID, params); err != nil {
+			return nil, fmt.Errorf("update transaction error: %w", err)
+		}
+		h.logDebug("Updated transaction category",
+			"order_id", order.GetID(),
+			"transaction_id", transaction.ID,
+			"category_id", result.CategoryID)
+	} else {
+		h.logDebug("[DRY RUN] Would update transaction category",
+			"order_id", order.GetID(),
+			"transaction_id", transaction.ID,
+			"category_id", result.CategoryID)
+	}
 	result.Transaction = transaction
 	result.Processed = true
 	return result, nil

@@ -667,6 +667,7 @@ func TestWalmartHandler_ProcessOrder_MultiDelivery_ResumesInterruptedConsolidati
 		result: &ConsolidationResult{ConsolidatedTransaction: consolidated},
 	}
 	handler := createTestWalmartHandler(t, splitter, consolidator, monarchClient)
+	handler.SetAllowConsolidation(true) // legacy destructive path, opt-in only
 
 	order := &walmartTestOrder{
 		id:       "INTERRUPTED-CONSOLIDATION",
@@ -703,6 +704,7 @@ func TestWalmartHandler_ProcessOrder_MultiDelivery_FallsBackToAggregateSubset(t 
 		},
 	}
 	handler := createTestWalmartHandler(t, splitter, consolidator, monarchClient)
+	handler.SetAllowConsolidation(true) // legacy destructive path, opt-in only
 
 	orderDate := time.Date(2026, 7, 1, 8, 37, 37, 0, time.FixedZone("MDT", -6*60*60))
 	order := &walmartTestOrder{

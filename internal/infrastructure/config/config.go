@@ -29,6 +29,21 @@ type Config struct {
 	Categorizer   CategorizerConfig   `yaml:"categorizer"`
 	Storage       StorageConfig       `yaml:"storage"`
 	Observability ObservabilityConfig `yaml:"observability"`
+	Safety        SafetyConfig        `yaml:"safety"`
+}
+
+// SafetyConfig gates Monarch writes that cannot be undone.
+type SafetyConfig struct {
+	// AllowDestructiveWrites permits deleting Monarch transactions and changing
+	// their amounts, which the legacy multi-charge consolidation does. Off by
+	// default; ITEMIZE_ALLOW_DESTRUCTIVE_WRITES=1 also enables it.
+	AllowDestructiveWrites bool `yaml:"allow_destructive_writes"`
+}
+
+// DestructiveWritesAllowed reports whether transaction deletes and amount
+// changes are permitted (config or ITEMIZE_ALLOW_DESTRUCTIVE_WRITES=1).
+func (c *Config) DestructiveWritesAllowed() bool {
+	return c.Safety.AllowDestructiveWrites || os.Getenv("ITEMIZE_ALLOW_DESTRUCTIVE_WRITES") == "1"
 }
 
 // StorageConfig holds database configuration

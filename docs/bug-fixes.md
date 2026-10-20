@@ -12,6 +12,28 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: Multi-charge Walmart orders would rewrite amounts and delete bank transactions
+
+**Description:**
+For a Walmart order billed as several card charges, the handler matched each charge to its Monarch transaction, then changed the first transaction's amount to the order total and deleted the others. A dry run showed this for a three-charge order whose Walmart order total was net of a later refund: the rewritten amount would have understated spending by the refund, the refund (a separate Monarch transaction) would have been counted twice, and two bank-imported transactions would have been deleted.
+
+**Test Case:**
+- `TestWalmartMultiCharge_RefundNettedTotalSplitsEachChargeWithoutConsolidating`, `TestWalmartMultiCharge_SingleCategoryChargesSummingToGrossTotal`, `TestWalmartMultiCharge_TipChargeIsSplitOnItsOwn`, `TestWalmartMultiCharge_AggregateSubsetSplitsEachTransaction`, `TestWalmartMultiCharge_InterruptedConsolidationIsLeftForReview`, `TestWalmartMultiCharge_DryRunWritesNothingButReportsEveryCharge`, `TestAmazonMultiCharge_SplitsEachChargeWithoutConsolidating`
+
+**Root Cause:**
+Consolidation (`Consolidator.ConsolidateTransactions`) was the only multi-charge strategy, and it was fed `order.GetTotal()`, which Walmart reports net of refunds, rather than the ledger's charges.
+
+**Fix Applied:**
+- By default, each charge's transaction is categorized on its own: split across the order's categories in proportion to their item subtotals (tax and tip follow), or given the single category. Notes start with `Charge i of N ($x of $total for this order)`. Amounts are never changed and nothing is deleted. A tip billed as its own charge is split the same way.
+- The same applies to the aggregate-subset fallback and to Amazon multi-charge orders.
+- Consolidation now runs only when `safety.allow_destructive_writes` (or `ITEMIZE_ALLOW_DESTRUCTIVE_WRITES=1`) is set, and then uses the sum of the ledger charges. Resuming an interrupted consolidation is skipped with a "needs manual review" reason when it is off.
+- Each charge's transaction is recorded in `order_transactions` with role `charge`.
+
+**Verification:**
+- New tests fail on the old code and pass now; `go test ./...` passes.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-20: Split categories were attached to the wrong items
 
 **Description:**

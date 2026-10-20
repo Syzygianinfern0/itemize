@@ -50,6 +50,11 @@ anthropic:
 categorizer:
   provider: "${CATEGORIZER_PROVIDER}"
 
+# Safety: deleting Monarch transactions or changing their amounts (the legacy
+# multi-charge consolidation) is refused unless this is true. Leave it off.
+safety:
+  allow_destructive_writes: false
+
 # Storage configuration
 storage:
   database_path: "monarch_sync.db"  # Consolidated database

@@ -219,7 +219,9 @@ func groupByCategory(items []CategorizedItem) []*categoryGroup {
 // AllocateSplits splits amount across the items' categories in proportion to
 // each category's item subtotal. Tax, tip and fees are therefore shared out
 // proportionally too. The splits carry amount's sign and sum to it exactly
-// (rounding is settled cent by cent, largest remainder first).
+// (rounding is settled cent by cent, largest remainder first). A category
+// whose share rounds to zero is left out, so a tiny amount can yield a single
+// split.
 //
 // The same rule serves a whole-order transaction and one of several charges
 // for an order: each charge is split in the order's category proportions.
@@ -262,13 +264,17 @@ func AllocateSplits(items []CategorizedItem, amount float64) ([]*monarch.Transac
 		allocated++
 	}
 
-	splits := make([]*monarch.TransactionSplit, len(groups))
+	// Categories whose share rounds to zero (tiny charges) get no split.
+	splits := make([]*monarch.TransactionSplit, 0, len(groups))
 	for i, group := range groups {
-		splits[i] = &monarch.TransactionSplit{
+		if cents[i] == 0 {
+			continue
+		}
+		splits = append(splits, &monarch.TransactionSplit{
 			Amount:     sign * float64(cents[i]) / 100,
 			CategoryID: group.categoryID,
 			Notes:      groupNotes(group),
-		}
+		})
 	}
 	return splits, nil
 }

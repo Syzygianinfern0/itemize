@@ -91,6 +91,9 @@ type ProcessResult struct {
 	Allocations *allocator.Result
 	Splits      []*monarch.TransactionSplit
 	Refunds     []RefundProcessResult
+	// Charges is set when a multi-charge order's transactions were each split
+	// on their own (no consolidation). Transaction/Splits mirror the first.
+	Charges []ChargeProcessResult
 
 	// Transaction tracking for audit trail - the matched/consolidated transaction
 	Transaction *monarch.Transaction
@@ -103,6 +106,17 @@ type ProcessResult struct {
 	// Debug/reconciliation audit fields
 	MatchDiagnosticsJSON   string
 	ReconciledTransactions []*monarch.Transaction
+}
+
+// ChargeProcessResult describes one charge's transaction categorized for a
+// multi-charge order whose transactions are split individually.
+type ChargeProcessResult struct {
+	Amount       float64
+	Transaction  *monarch.Transaction
+	Splits       []*monarch.TransactionSplit
+	CategoryID   string
+	CategoryName string
+	MonarchNotes string
 }
 
 // RefundProcessResult describes a refund transaction categorized for an order.
@@ -119,6 +133,16 @@ type AmazonHandler struct {
 	splitter     CategorySplitter
 	monarch      MonarchClient
 	logger       *slog.Logger
+
+	// allowConsolidation enables the legacy multi-charge path that rewrites
+	// one transaction's amount and deletes the others. Off by default.
+	allowConsolidation bool
+}
+
+// SetAllowConsolidation enables (true) or disables (false, the default) the
+// destructive consolidation of multi-charge orders.
+func (h *AmazonHandler) SetAllowConsolidation(allow bool) {
+	h.allowConsolidation = allow
 }
 
 // NewAmazonHandler creates a new Amazon order handler
@@ -311,7 +335,7 @@ func (h *AmazonHandler) ProcessOrder(
 
 	// Step 5: Consolidate multi-transaction matches
 	if consolidatedTxn == nil {
-		if len(matchedTxns) > 1 {
+		if len(matchedTxns) > 1 && h.allowConsolidation {
 			consolidationResult, err := h.consolidator.ConsolidateTransactions(ctx, matchedTxns, order, dryRun)
 			if err != nil {
 				return nil, fmt.Errorf("consolidation error: %w", err)
@@ -373,12 +397,76 @@ func (h *AmazonHandler) ProcessOrder(
 		baseItems:   orderItems,
 	}
 
-	// Step 8: Categorize and create splits
-	splits, err := h.splitter.CreateSplits(ctx, allocatedOrder, consolidatedTxn, catCategories, monarchCategories)
-	if err != nil {
-		return nil, fmt.Errorf("split creation error: %w", err)
+	// Step 8-9: Categorize, create splits and apply. Without consolidation,
+	// each charge's transaction is split on its own in the order's category
+	// proportions; amounts are never changed and nothing is deleted.
+	if consolidatedTxn == nil && len(matchedTxns) > 1 {
+		total := 0.0
+		for _, txn := range matchedTxns {
+			total += math.Abs(txn.Amount)
+		}
+		for i, txn := range matchedTxns {
+			prefix := fmt.Sprintf("Charge %d of %d ($%.2f of $%.2f for this order)\n", i+1, len(matchedTxns), math.Abs(txn.Amount), total)
+			charge := &ProcessResult{}
+			if err := h.applyToTransaction(ctx, charge, order, allocatedOrder, txn, catCategories, monarchCategories, dryRun, prefix); err != nil {
+				return nil, fmt.Errorf("charge %d of %d (transaction %s): %w", i+1, len(matchedTxns), txn.ID, err)
+			}
+			result.Charges = append(result.Charges, ChargeProcessResult{
+				Amount:       txn.Amount,
+				Transaction:  txn,
+				Splits:       charge.Splits,
+				CategoryID:   charge.CategoryID,
+				CategoryName: charge.CategoryName,
+				MonarchNotes: charge.MonarchNotes,
+			})
+		}
+		first := result.Charges[0]
+		result.Splits = first.Splits
+		result.CategoryID = first.CategoryID
+		result.CategoryName = first.CategoryName
+		result.MonarchNotes = first.MonarchNotes
+		result.Transaction = first.Transaction
+		result.Processed = true
+		return result, nil
 	}
 
+	if err := h.applyToTransaction(ctx, result, order, allocatedOrder, consolidatedTxn, catCategories, monarchCategories, dryRun, ""); err != nil {
+		return nil, err
+	}
+
+	result.Transaction = consolidatedTxn
+	result.Processed = true
+	return result, nil
+}
+
+// applyToTransaction categorizes allocatedOrder and writes the category or
+// splits to txn, recording what it did in result. notePrefix, if set, is
+// prepended to every note.
+func (h *AmazonHandler) applyToTransaction(
+	ctx context.Context,
+	result *ProcessResult,
+	order AmazonOrder,
+	allocatedOrder providers.Order,
+	consolidatedTxn *monarch.Transaction,
+	catCategories []categorizer.Category,
+	monarchCategories []*monarch.TransactionCategory,
+	dryRun bool,
+	notePrefix string,
+) error {
+	splits, err := h.splitter.CreateSplits(ctx, allocatedOrder, consolidatedTxn, catCategories, monarchCategories)
+	if err != nil {
+		return fmt.Errorf("split creation error: %w", err)
+	}
+
+	if splits != nil && notePrefix != "" {
+		prefixed := make([]*monarch.TransactionSplit, len(splits))
+		for i, split := range splits {
+			copied := *split
+			copied.Notes = notePrefix + split.Notes
+			prefixed[i] = &copied
+		}
+		splits = prefixed
+	}
 	result.Splits = splits
 
 	// Step 9: Apply to Monarch
@@ -386,18 +474,20 @@ func (h *AmazonHandler) ProcessOrder(
 		// Single category - update transaction category
 		categoryID, notes, err := h.splitter.GetSingleCategoryInfo(ctx, allocatedOrder, catCategories)
 		if err != nil {
-			return nil, fmt.Errorf("get category info error: %w", err)
+			return fmt.Errorf("get category info error: %w", err)
 		}
 
 		// Populate audit trail fields
 		result.CategoryID = categoryID
-		result.MonarchNotes = notes
 		// Extract category name from notes (format: "CategoryName:\n...")
 		if colonIdx := len(notes); colonIdx > 0 {
 			if idx := strings.Index(notes, ":"); idx > 0 {
 				result.CategoryName = notes[:idx]
 			}
 		}
+
+		notes = notePrefix + notes
+		result.MonarchNotes = notes
 
 		if !dryRun {
 			reviewed := false
@@ -418,7 +508,7 @@ func (h *AmazonHandler) ProcessOrder(
 					"category_name", result.CategoryName)
 			}
 			if err := h.monarch.UpdateTransaction(ctx, consolidatedTxn.ID, params); err != nil {
-				return nil, fmt.Errorf("update transaction error: %w", err)
+				return fmt.Errorf("update transaction error: %w", err)
 			}
 			h.logDebug("Updated transaction notes",
 				"order_id", order.GetID(),
@@ -433,7 +523,7 @@ func (h *AmazonHandler) ProcessOrder(
 		// Multiple categories - apply splits
 		if !dryRun {
 			if err := h.monarch.UpdateSplits(ctx, consolidatedTxn.ID, splits); err != nil {
-				return nil, fmt.Errorf("update splits error: %w", err)
+				return fmt.Errorf("update splits error: %w", err)
 			}
 			// Mark the parent transaction as reviewed so Monarch's rule engine
 			// doesn't re-categorize it after the split is applied.
@@ -457,9 +547,7 @@ func (h *AmazonHandler) ProcessOrder(
 		}
 	}
 
-	result.Transaction = consolidatedTxn
-	result.Processed = true
-	return result, nil
+	return nil
 }
 
 // matchReportedCharges finds a Monarch transaction for each card charge Amazon

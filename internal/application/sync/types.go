@@ -127,6 +127,17 @@ func NewOrchestrator(
 		)
 	}
 
+	// Multi-charge consolidation rewrites amounts and deletes transactions;
+	// it only runs when destructive writes are explicitly allowed.
+	if clients != nil && clients.AllowDestructiveWrites {
+		if amazonHandler != nil {
+			amazonHandler.SetAllowConsolidation(true)
+		}
+		if walmartHandler != nil {
+			walmartHandler.SetAllowConsolidation(true)
+		}
+	}
+
 	// Create Simple handler for providers without special handling (Costco, etc.)
 	var simpleHandler *handlers.SimpleHandler
 	if clients != nil && clients.Monarch != nil && spl != nil {

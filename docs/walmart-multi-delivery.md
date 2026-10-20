@@ -1,3 +1,5 @@
+> **Current behavior (2026-10):** multi-charge orders are no longer consolidated by default. Each charge's Monarch transaction is split on its own, in proportion to the order's category subtotals; no amount is changed and nothing is deleted. The consolidation described below (rewrite one amount, delete the rest) runs only with `safety.allow_destructive_writes: true` (or `ITEMIZE_ALLOW_DESTRUCTIVE_WRITES=1`), and then uses the sum of the ledger charges, not Walmart's refund-netted order total. This document is kept as design history.
+
 # Walmart Multi-Delivery Order Handling
 
 **Status:** Design Approved - Implementation Ready
