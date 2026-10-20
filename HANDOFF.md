@@ -4,6 +4,33 @@ Branch: `walmart-hardening` on the fork `Syzygianinfern0/itemize` (upstream: `es
 
 This file hands the project to the next agent. It captures what an evaluation found, how to work safely, and a prioritized task list. Read it fully before changing code.
 
+## Status (2026-10-20)
+
+All P0, P1 and P2 tasks below are implemented on this branch, one commit each, with tests (`go test ./...` and `go vet ./...` pass). Details and test names are in `docs/bug-fixes.md`; the write workflow and its guardrails are in `docs/write-safety.md`.
+
+| Task | Commit subject |
+|---|---|
+| P0-1 | fix: join split categories to items by index, not position |
+| P0-2 | fix: split each charge of multi-charge orders instead of consolidating |
+| P0-3 | feat: refuse destructive Monarch writes and re-validate targets before writing |
+| P0-4 | feat: propose changes for review and apply only approved ones |
+| P1-1 | test: cover Walmart history and Monarch transaction pagination |
+| P1-2 | fix: store timestamps in a format SQLite reads back and migrate old rows |
+| P1-3 | fix: record dry-run failures, skips and pending orders as dry-run |
+| P1-4 | fix: support -order-id for Walmart via purchase-history lookup |
+| P1-5 | fix: make the LLM timeout configurable and mark exhausted timeouts retryable |
+| P1-6 | feat: categorize Walmart refunds matched to a purchase by price |
+| P1-7 | fix: match PayPal-paid walmart.com charges and refunds |
+| P1-8 | perf: skip the Walmart ledger call when no Monarch transaction can match |
+| P2 | feat: review UI and API for proposals, approval and apply (vanilla JS embedded via `embed.FS`, confirmed with the owner) |
+
+Notes for the next agent:
+
+- P1-6: no Walmart endpoint itemize already uses lists in-store return receipts, and adding new Walmart queries is out of bounds, so refunds are matched to purchases by price (unambiguous matches only; items Walmart marked returned win). Review these proposals with care.
+- P1-2 stores timestamps as `2006-01-02 15:04:05-07:00` (the SQLite driver's `sqlite` format, which it scans back) rather than RFC 3339 with a `T`; migration 00012 rewrites old rows.
+- Splits are now allocated proportionally to category subtotals for every transaction (tip and fees are shared out instead of landing on the largest split).
+- Nothing has been written to Monarch. Applying approved proposals needs the owner's go-ahead and, in this workspace, `MONARCH_ALLOW_MUTATIONS=1` (the `go.work` guard refuses mutations otherwise).
+
 ## Goal
 
 The owner wants Monarch Money "Retail Purchase Sync"-style itemization for Walmart: match Walmart orders to Monarch transactions, split each transaction by category, and write item details to notes. itemize already does most of this. The goal is to make it **safe and trustworthy** for real runs, then add a **local web UI to review and approve every change** before it is written to Monarch.
