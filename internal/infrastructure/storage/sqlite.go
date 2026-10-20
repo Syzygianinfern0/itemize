@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
 	// Import migrations package to register Go migrations
-	_ "github.com/eshaffer321/itemize/internal/infrastructure/storage/migrations"
+	"github.com/eshaffer321/itemize/internal/infrastructure/storage/migrations"
 )
 
 //go:embed migrations/*.sql
@@ -29,7 +30,9 @@ var _ Repository = (*Storage)(nil)
 
 // NewStorage creates a new storage instance with SQLite database
 func NewStorage(dbPath string) (*Storage, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// Store time.Time as ISO 8601 with a numeric offset. The driver's default
+	// (time.String()) can't always be scanned back, e.g. "-0400 -0400".
+	db, err := sql.Open("sqlite", withTimeFormat(dbPath))
 	if err != nil {
 		return nil, err
 	}
@@ -49,6 +52,22 @@ func NewStorage(dbPath string) (*Storage, error) {
 	}
 
 	return s, nil
+}
+
+// withTimeFormat adds the driver's _time_format=sqlite option to a DSN.
+func withTimeFormat(dsn string) string {
+	if strings.Contains(dsn, "_time_format=") {
+		return dsn
+	}
+	if strings.Contains(dsn, "?") {
+		return dsn + "&_time_format=sqlite"
+	}
+	return dsn + "?_time_format=sqlite"
+}
+
+// rewriteLegacyTimes converts time.String() timestamps written by older builds.
+func rewriteLegacyTimes(db *sql.DB) error {
+	return migrations.RewriteLegacyTimes(db)
 }
 
 // runMigrations uses goose to run all pending migrations

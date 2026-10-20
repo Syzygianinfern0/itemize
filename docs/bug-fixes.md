@@ -12,6 +12,26 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: A second sync failed reading back stored order dates
+
+**Description:**
+After one sync, the next failed with `sql: Scan error on column index 4, name "order_date": unsupported Scan, storing driver.Value type string into type *time.Time`.
+
+**Test Case:**
+- `TestRecordTimesWithNumericZoneRoundTrip`, `TestMigrationRewritesLegacyTimeStrings` (storage)
+
+**Root Cause:**
+The SQLite driver (modernc) stores `time.Time` as Go's `time.String()` by default. Walmart order dates carry a numeric offset with no zone abbreviation, so they were stored as `2026-10-12 00:24:11 -0400 -0400`, which the driver cannot parse back. `processed_at` also kept the monotonic-clock suffix (`m=+216.3`).
+
+**Fix Applied:**
+- The DSN sets `_time_format=sqlite`, so timestamps are stored as ISO 8601 with a numeric offset (`2026-10-12 00:24:11-04:00`), which the driver scans back.
+- Migration `00012` rewrites existing `time.String()` values in `processing_records`, `processing_attempts`, `ledger_charges` and `order_ledgers` to that format, keeping each value's offset.
+
+**Verification:**
+- The round-trip test fails with the exact production error on the old DSN and passes now; `go test ./...` passes.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-20: Dry-run failures and skips were recorded as real-run results
 
 **Description:**
