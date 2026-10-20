@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -75,6 +76,28 @@ type AnthropicConfig struct {
 // API key is set).
 type CategorizerConfig struct {
 	Provider string `yaml:"provider"`
+	// Timeout bounds each LLM request, as a Go duration ("90s"). LLM_TIMEOUT
+	// overrides it; the default is DefaultLLMTimeout.
+	Timeout string `yaml:"timeout"`
+}
+
+// DefaultLLMTimeout is the per-request LLM timeout when none is configured.
+// Reasoning models can take well over 30 seconds on a long item list.
+const DefaultLLMTimeout = 90 * time.Second
+
+// LLMTimeout returns the per-request LLM timeout (LLM_TIMEOUT, then
+// categorizer.timeout, then DefaultLLMTimeout). Invalid or non-positive
+// values fall back to the default.
+func (c *Config) LLMTimeout() time.Duration {
+	for _, value := range []string{os.Getenv("LLM_TIMEOUT"), c.Categorizer.Timeout} {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		if d, err := time.ParseDuration(strings.TrimSpace(value)); err == nil && d > 0 {
+			return d
+		}
+	}
+	return DefaultLLMTimeout
 }
 
 // ProvidersConfig holds provider-specific configuration

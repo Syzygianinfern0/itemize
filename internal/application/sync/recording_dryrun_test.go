@@ -1,13 +1,17 @@
 package sync
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"log/slog"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/eshaffer321/itemize/internal/application/sync/handlers"
+	"github.com/eshaffer321/itemize/internal/domain/categorizer"
 	"github.com/eshaffer321/itemize/internal/infrastructure/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,4 +59,17 @@ func TestHandleResult_RealRunFailuresAreNotDryRun(t *testing.T) {
 	record, err := store.GetRecord(order.id)
 	require.NoError(t, err)
 	assert.False(t, record.DryRun)
+}
+
+func TestHandleResult_TransientLLMFailureIsMarkedRetryable(t *testing.T) {
+	o, store := recordingOrchestrator()
+	order := &mockOrder{id: "SYN-LLM-TIMEOUT", date: time.Now(), total: 8.09}
+
+	err := fmt.Errorf("split creation error: LLM categorization failed: %w", fmt.Errorf("%w: %w", categorizer.ErrTransient, context.DeadlineExceeded))
+	_, _, _ = o.handleResult(order, nil, err, Options{DryRun: true})
+	record, getErr := store.GetRecord(order.id)
+	require.NoError(t, getErr)
+	assert.Equal(t, "failed", record.Status)
+	assert.True(t, strings.HasPrefix(record.ErrorMessage, "[retryable] "))
+	assert.False(t, store.IsProcessed(order.id), "it is retried on the next run")
 }

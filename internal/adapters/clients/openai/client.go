@@ -31,6 +31,14 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
+// WithTimeout sets the per-request timeout and returns c.
+func (c *Client) WithTimeout(timeout time.Duration) *Client {
+	if timeout > 0 {
+		c.httpClient.Timeout = timeout
+	}
+	return c
+}
+
 // CreateChatCompletion calls the OpenAI chat-completions endpoint.
 func (c *Client) CreateChatCompletion(ctx context.Context, request categorizer.ChatCompletionRequest) (*categorizer.ChatCompletionResponse, error) {
 	requestBody, err := json.Marshal(request)

@@ -46,6 +46,8 @@ Reads `config.yaml` or env vars:
   - `OPENAI_API_KEY` (also `OPENAI_APIKEY`) with optional `OPENAI_MODEL` (default `gpt-6-luna`)
   - `ANTHROPIC_API_KEY` (also `CLAUDE_API_KEY`) with optional `ANTHROPIC_MODEL` (default `claude-haiku-4-5`)
 - `CATEGORIZER_PROVIDER` — `openai` or `anthropic` to force a backend when both keys are set (auto-detected otherwise)
+- `LLM_TIMEOUT` (or `categorizer.timeout`) — per-request LLM timeout as a Go duration, default `90s`
+- `safety.allow_destructive_writes` (or `ITEMIZE_ALLOW_DESTRUCTIVE_WRITES=1`) — permit deleting transactions and changing amounts (legacy multi-charge consolidation). Off by default; see `docs/write-safety.md`
 - SQLite DB auto-created at `monarch_sync.db`
 
 ## Architecture

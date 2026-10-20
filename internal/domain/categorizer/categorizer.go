@@ -237,6 +237,11 @@ func (c *Categorizer) resolveBatchPosition(entry llmCategorization, batch []Item
 	return -1
 }
 
+// ErrTransient marks a categorization failure caused by a transient LLM
+// problem (timeout, connection error, 5xx) that persisted through retries.
+// The order is worth retrying on a later run.
+var ErrTransient = errors.New("LLM temporarily unavailable")
+
 // Retry configuration
 const (
 	maxRetries = 3
@@ -322,6 +327,9 @@ func (c *Categorizer) callLLM(ctx context.Context, items []Item, categories []Ca
 		return &result, nil
 	}
 
+	if isRetryableError(lastErr) {
+		return nil, fmt.Errorf("%w: %w after %d attempts", ErrTransient, lastErr, maxRetries)
+	}
 	return nil, fmt.Errorf("%w after %d attempts", lastErr, maxRetries)
 }
 

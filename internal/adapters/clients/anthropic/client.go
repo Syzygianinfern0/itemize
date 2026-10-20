@@ -45,6 +45,14 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
+// WithTimeout sets the per-request timeout and returns c.
+func (c *Client) WithTimeout(timeout time.Duration) *Client {
+	if timeout > 0 {
+		c.httpClient.Timeout = timeout
+	}
+	return c
+}
+
 // CreateChatCompletion translates the request to Anthropic's Messages API,
 // posts it, and returns the response in the categorizer's vocabulary.
 func (c *Client) CreateChatCompletion(ctx context.Context, request categorizer.ChatCompletionRequest) (*categorizer.ChatCompletionResponse, error) {

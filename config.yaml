@@ -49,6 +49,7 @@ anthropic:
 # Set to "openai" or "anthropic" to force a specific backend.
 categorizer:
   provider: "${CATEGORIZER_PROVIDER}"
+  timeout: "90s"  # per LLM request; LLM_TIMEOUT overrides
 
 # Safety: deleting Monarch transactions or changing their amounts (the legacy
 # multi-charge consolidation) is refused unless this is true. Leave it off.

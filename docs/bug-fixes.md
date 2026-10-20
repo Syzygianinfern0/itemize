@@ -12,6 +12,26 @@ Each bug fix entry should include:
 
 ## Bug Fixes
 
+### 2026-10-20: LLM categorization timed out on a slow response
+
+**Description:**
+One order failed with `LLM categorization failed: ... context deadline exceeded (Client.Timeout exceeded while awaiting headers) after 3 attempts`.
+
+**Test Case:**
+- `TestWithTimeout_BoundsEachRequest` (OpenAI client), `TestLLMTimeout` (config), `TestCategorizeItems_TimeoutsAreRetriedThenMarkedTransient`, `TestCategorizeItems_PermanentErrorsAreNotTransient` (categorizer), `TestHandleResult_TransientLLMFailureIsMarkedRetryable` (orchestrator)
+
+**Root Cause:**
+The OpenAI and Anthropic clients had a fixed 30 s HTTP timeout. Reasoning models can take longer than that on some requests; the categorizer's three retries did apply, but each hit the same 30 s limit.
+
+**Fix Applied:**
+- The per-request timeout is configurable (`categorizer.timeout` in `config.yaml`, or `LLM_TIMEOUT`, as a Go duration) and defaults to 90 s.
+- When retries are exhausted on a transient error (timeout, connection error, 5xx), the categorizer wraps it in `categorizer.ErrTransient`, and the order's failure record is prefixed `[retryable]`. It is not marked processed, so the next run retries it.
+
+**Verification:**
+- New tests pass; `go test ./...` passes.
+
+**Commit:** See branch `walmart-hardening`.
+
 ### 2026-10-20: `-order-id` did not work for Walmart
 
 **Description:**

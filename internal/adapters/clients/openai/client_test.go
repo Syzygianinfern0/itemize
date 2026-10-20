@@ -2,10 +2,13 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,4 +80,21 @@ func TestCreateChatCompletion_OpaqueServerError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "502")
+}
+
+func TestWithTimeout_BoundsEachRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv).WithTimeout(50 * time.Millisecond)
+	start := time.Now()
+	_, err := c.CreateChatCompletion(context.Background(), categorizer.ChatCompletionRequest{Model: "m"})
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), time.Second)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "Timeout"))
 }

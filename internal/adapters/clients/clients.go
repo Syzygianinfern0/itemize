@@ -88,12 +88,12 @@ func newChatClient(cfg *config.Config, logger *slog.Logger) (categorizer.ChatCli
 		if openKey == "" {
 			return nil, "", errMissingKey(providerOpenAI)
 		}
-		return openaiclient.NewClient(openKey), modelOrDefault(cfg.OpenAI.Model, categorizer.DefaultModel), nil
+		return openaiclient.NewClient(openKey).WithTimeout(cfg.LLMTimeout()), modelOrDefault(cfg.OpenAI.Model, categorizer.DefaultModel), nil
 	case providerAnthropic:
 		if anthKey == "" {
 			return nil, "", errMissingKey(providerAnthropic)
 		}
-		return anthropicclient.NewClient(anthKey), modelOrDefault(cfg.Anthropic.Model, defaultAnthropicModel), nil
+		return anthropicclient.NewClient(anthKey).WithTimeout(cfg.LLMTimeout()), modelOrDefault(cfg.Anthropic.Model, defaultAnthropicModel), nil
 	case "":
 		// auto-detect
 	default:
@@ -104,12 +104,12 @@ func newChatClient(cfg *config.Config, logger *slog.Logger) (categorizer.ChatCli
 	hasAnth := anthKey != ""
 	switch {
 	case hasOpen && !hasAnth:
-		return openaiclient.NewClient(openKey), modelOrDefault(cfg.OpenAI.Model, categorizer.DefaultModel), nil
+		return openaiclient.NewClient(openKey).WithTimeout(cfg.LLMTimeout()), modelOrDefault(cfg.OpenAI.Model, categorizer.DefaultModel), nil
 	case hasAnth && !hasOpen:
-		return anthropicclient.NewClient(anthKey), modelOrDefault(cfg.Anthropic.Model, defaultAnthropicModel), nil
+		return anthropicclient.NewClient(anthKey).WithTimeout(cfg.LLMTimeout()), modelOrDefault(cfg.Anthropic.Model, defaultAnthropicModel), nil
 	case hasOpen && hasAnth:
 		logger.Warn("both OPENAI_API_KEY and ANTHROPIC_API_KEY are set; defaulting to openai. Set CATEGORIZER_PROVIDER=anthropic to pick Claude.")
-		return openaiclient.NewClient(openKey), modelOrDefault(cfg.OpenAI.Model, categorizer.DefaultModel), nil
+		return openaiclient.NewClient(openKey).WithTimeout(cfg.LLMTimeout()), modelOrDefault(cfg.OpenAI.Model, categorizer.DefaultModel), nil
 	default:
 		return nil, "", errNoLLMKeyConfigured()
 	}

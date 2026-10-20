@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,8 +26,13 @@ func (o *Orchestrator) handleResult(order providers.Order, result *handlers.Proc
 		}
 	}
 	if err != nil {
+		message := err.Error()
+		if errors.Is(err, categorizer.ErrTransient) {
+			// Not processed, so the next run retries it; say so in the record.
+			message = "[retryable] " + message
+		}
 		o.logger.Error("Handler error", "order_id", order.GetID(), "error", err)
-		o.recordError(order, err.Error(), nil, noWrites)
+		o.recordError(order, message, nil, noWrites)
 		return false, false, err
 	}
 	if result.Skipped {
